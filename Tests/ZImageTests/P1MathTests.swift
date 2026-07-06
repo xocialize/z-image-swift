@@ -96,6 +96,32 @@ final class P1MathTests: XCTestCase {
         let pairNormOut = MLX.sum(out.reshaped(1, n, 4, 64, 2).square(), axis: -1)
         assertClose(pairNormOut, pairNormIn, atol: 1e-3, "rotation preserves pair norms")
     }
+
+    /// img2img `t_start` must match diffusers `get_timesteps` exactly: `int(steps − min(steps·s, steps))`.
+    /// Regression guard for the off-by-one that floored the product instead of the difference — it made
+    /// strength 0.6 start one step late (sigma≈0.75 not 0.83), too little noise for the distilled 8-step
+    /// Turbo to escape the input, so edits came back near-identity. Reference values from
+    /// StableDiffusion3Img2ImgPipeline.get_timesteps (which Z-Image's img2img pipeline copies).
+    func testImg2ImgStartStepMatchesDiffusers() throws {
+        // (steps, strength) → diffusers int(steps − min(steps·strength, steps))
+        let cases: [(Int, Float, Int)] = [
+            (8, 0.6, 3),   // the reported default — was 4 (near-identity), must be 3: int(8−4.8)
+            (8, 0.85, 1),  // int(8 − 6.8) = int(1.2)
+            (8, 1.0, 0),   // full strength → denoise from pure noise
+            (8, 0.0, 8),   // zero strength → skip all steps (returns the clean latent)
+            (8, 0.5, 4),   // int(8 − 4.0)
+            (28, 0.6, 11), // Base tier (28-step): int(28 − 16.8) = int(11.2)
+            (28, 0.3, 19), // int(28 − 8.4) = int(19.6)
+            (4, 0.75, 1),  // 4-step cadence: int(4 − 3.0)
+        ]
+        for (steps, strength, expected) in cases {
+            let got = ZImagePipeline.img2imgStartStep(numInferenceSteps: steps, strength: strength)
+            XCTAssertEqual(got, expected,
+                "img2imgStartStep(steps: \(steps), strength: \(strength)) = \(got), expected \(expected)")
+            XCTAssertGreaterThanOrEqual(got, 0)
+            XCTAssertLessThanOrEqual(got, steps)
+        }
+    }
 }
 
 import MLXRandom

@@ -35,6 +35,18 @@ public enum ZImagePipeline {
         public let image: MLXArray?   // decoded [-1,1] NCHW, nil for output_type latent
     }
 
+    /// img2img start step (`t_start`), matching diffusers' `get_timesteps` EXACTLY:
+    /// `init_timestep = min(steps·strength, steps)`, `t_start = int(max(steps − init_timestep, 0))`.
+    /// The floor lands on the *difference*. The naive `steps − int(steps·strength)` floors the product
+    /// instead and lands one step too late — e.g. steps=8, strength=0.6: correct=3 (sigma≈0.83), naive=4
+    /// (sigma≈0.75). That single step is the difference between an applied edit and a near-identity one
+    /// on the distilled 8-step Turbo (few, large denoise jumps).
+    public static func img2imgStartStep(numInferenceSteps: Int, strength: Float) -> Int {
+        let s = min(max(strength, 0), 1)
+        let n = Float(numInferenceSteps)
+        return Int(max(n - min(n * s, n), 0))
+    }
+
     /// Mirrors `generate()` in the reference. `initLatents` injects the initial noise
     /// (parity path); when nil, latents are drawn from MLXRandom using `seed`.
     public static func generate(
@@ -97,11 +109,13 @@ public enum ZImagePipeline {
             mu: scheduler.useDynamicShifting ? mu : nil)
 
         // img2img: interpolate the clean latent with the noise at the start sigma, and begin the
-        // denoise loop at t_start (diffusers get_timesteps: t_start = steps − floor(steps·strength)).
+        // denoise loop at t_start. Match diffusers get_timesteps EXACTLY: the floor is applied to the
+        // *difference*, not to steps·strength — `t_start = int(steps − min(steps·strength, steps))`.
+        // The naive `steps − int(steps·strength)` floors in the wrong place and starts one step late
+        // (less noise injected → distilled Turbo can't escape the input → near-identity edits).
         var startStep = 0
         if let cleanLatent = img2imgCleanLatent {
-            let s = min(max(strength, 0), 1)
-            startStep = numInferenceSteps - Int(Float(numInferenceSteps) * s)
+            startStep = img2imgStartStep(numInferenceSteps: numInferenceSteps, strength: strength)
             let sigmaStart = scheduler.sigmas[startStep]
             latents = (1 - sigmaStart) * cleanLatent.asType(.float32) + sigmaStart * latents
         }

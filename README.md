@@ -47,9 +47,16 @@ await package.unload()
 Base tier: `ZImageT2IPackage(configuration: .base(quant: .bf16, snapshotPath: ...))` — non-distilled,
 ~28-step with CFG + negative prompts; the quality / LoRA-substrate tier.
 
-**Image-to-image (v0.2.0):** both tiers also expose an `imageEdit` surface — re-generate from an
+**Image-to-image (v0.2.1):** both tiers also expose an `imageEdit` surface — re-generate from an
 input image conditioned on a prompt. `metaData["strength"]` (0–1, default 0.6) controls how much of
-the input is preserved vs redrawn. Encode → renoise at the strength-picked sigma → denoise.
+the input is preserved vs redrawn. Encode → renoise at the strength-picked sigma → denoise. Low
+strength preserves structure (ideal for weather / lighting / restyle); high strength redraws freely.
+
+> **v0.2.1 fix:** the `strength → t_start` step count now floors the *difference* exactly like
+> diffusers (`int(steps − steps·strength)`), not the product. The prior off-by-one started one
+> denoise step late — too little injected noise for the distilled 8-step Turbo to escape the input,
+> so edits at the default 0.6 came back near-identity. Now 0.6 applies the prompt while preserving
+> composition.
 
 ```swift
 let out = try await package.run(IEditRequest(
