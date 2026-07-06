@@ -52,6 +52,9 @@ public enum ZImagePipeline {
         cfgTruncation: Float = 1.0,
         seed: UInt64 = 0,
         initLatents: MLXArray? = nil,
+        // img2img: model-space clean latent = (encodeMean(image) − shift)·scaling; strength in (0,1].
+        img2imgCleanLatent: MLXArray? = nil,
+        strength: Float = 1.0,
         transformerDtype: DType = .bfloat16,
         decodeImage: Bool = true,
         onStep: ((Int, Int) -> Void)? = nil
@@ -93,8 +96,19 @@ public enum ZImagePipeline {
             numInferenceSteps: numInferenceSteps,
             mu: scheduler.useDynamicShifting ? mu : nil)
 
+        // img2img: interpolate the clean latent with the noise at the start sigma, and begin the
+        // denoise loop at t_start (diffusers get_timesteps: t_start = steps − floor(steps·strength)).
+        var startStep = 0
+        if let cleanLatent = img2imgCleanLatent {
+            let s = min(max(strength, 0), 1)
+            startStep = numInferenceSteps - Int(Float(numInferenceSteps) * s)
+            let sigmaStart = scheduler.sigmas[startStep]
+            latents = (1 - sigmaStart) * cleanLatent.asType(.float32) + sigmaStart * latents
+        }
+
         let timesteps = scheduler.timesteps
         for (i, t) in timesteps.enumerated() {
+            if i < startStep { continue }   // img2img: skip the pre-start steps
             // skip computation when t == 0 on the last step
             if t == 0 && i == timesteps.count - 1 { continue }
 

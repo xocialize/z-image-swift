@@ -201,6 +201,30 @@ struct ZImageCLI {
             print("[cli] injected init_latents from \(goldenLatents)")
         }
 
+        // --img2img <input.png> [--strength 0.6]: encode the input → clean latent, renoise+denoise.
+        var img2imgClean: MLXArray? = nil
+        let strength = Float(opt("--strength") ?? "0.6")!
+        if let imgPath = opt("--img2img") {
+            let cs = CGColorSpace(name: CGColorSpace.sRGB)!
+            let src = CGImageSourceCreateWithURL(URL(fileURLWithPath: imgPath) as CFURL, nil)!
+            let cg = CGImageSourceCreateImageAtIndex(src, 0, nil)!
+            var buf = [UInt8](repeating: 0, count: size * size * 4)
+            let c = CGContext(data: &buf, width: size, height: size, bitsPerComponent: 8,
+                bytesPerRow: size * 4, space: cs, bitmapInfo: CGImageAlphaInfo.premultipliedLast.rawValue)!
+            c.draw(cg, in: CGRect(x: 0, y: 0, width: size, height: size))
+            var rgb = [Float](repeating: 0, count: 3 * size * size)
+            for p in 0..<(size * size) {
+                rgb[p] = Float(buf[p*4]) / 127.5 - 1
+                rgb[size*size + p] = Float(buf[p*4+1]) / 127.5 - 1
+                rgb[2*size*size + p] = Float(buf[p*4+2]) / 127.5 - 1
+            }
+            let image = MLXArray(rgb, [1, 3, size, size])
+            let moments = vae.encodeMoments(image)                 // [1, 32, h, w] (mean|logvar)
+            let mean = moments[0..., ..<vae.latentChannels, 0..., 0...]
+            img2imgClean = (mean - vae.shiftFactor) * vae.scalingFactor   // model-space clean latent
+            print("[cli] img2img from \(imgPath) strength=\(strength)")
+        }
+
         let t0 = Date()
         let result = ZImagePipeline.generate(
             transformer: transformer, vae: vae, textEncoder: textEncoder,
@@ -210,6 +234,7 @@ struct ZImageCLI {
             numInferenceSteps: steps, guidanceScale: guidance,
             negativePrompt: negativePrompt,
             seed: seed, initLatents: initLatents,
+            img2imgCleanLatent: img2imgClean, strength: strength,
             transformerDtype: ditDtype,
             onStep: { i, n in print("[cli] step \(i)/\(n)") })
         let elapsed = Date().timeIntervalSince(t0)

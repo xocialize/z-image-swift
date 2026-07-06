@@ -73,6 +73,13 @@ public final class ZImageT2IPackage: ModelPackage {
                         + "quality/LoRA tier — non-distilled ~28-step with CFG + negative "
                         + "prompts, strong photorealism and EN/CN text rendering, 512²–2048².",
                     modes: []
+                ),
+                IEditContract.descriptor(
+                    name: "z-image-img2img",
+                    summary: "Z-Image image-to-image (Apache-2.0): re-generate from an input image "
+                        + "conditioned on a prompt; metaData[\"strength\"] (0–1, default 0.6) sets "
+                        + "how much of the input is preserved vs redrawn.",
+                    modes: []
                 )
             ]
         )
@@ -131,28 +138,62 @@ public final class ZImageT2IPackage: ModelPackage {
 
     public func run(_ request: any CapabilityRequest) async throws -> any CapabilityResponse {
         guard let generator else { throw PackageError.notLoaded }
-        guard request.capability == .textToImage, let t2i = request as? T2IRequest else {
-            throw PackageError.unsupportedCapability(request.capability)
-        }
         try Task.checkCancellation()
-
-        // Dimensions must be /16 (vae_scale). Defaults to 1024².
-        let width = ((t2i.width ?? 1024) / 16) * 16
-        let height = ((t2i.height ?? 1024) / 16) * 16
-        let steps = t2i.steps ?? configuration.defaultSteps
-        let guidance = Float(t2i.guidanceScale ?? configuration.defaultGuidanceScale)
-
         let prof = MLXProfiler.shared
-        prof.beginRun("z-image textToImage steps=\(steps) \(width)x\(height)")
-        let (pixels, w, h) = generator.generate(
-            prompt: t2i.prompt, negativePrompt: t2i.negativePrompt,
-            width: width, height: height, steps: steps,
-            guidanceScale: guidance, seed: t2i.seed ?? 0)
-        prof.endRun(denominators: ["step": Double(steps)])
 
-        try Task.checkCancellation()
-        let png = try Self.encodePNG(pixels: pixels, width: w, height: h)
-        return T2IResponse(image: Image(format: .png, data: png, width: w, height: h))
+        if let t2i = request as? T2IRequest {
+            let width = ((t2i.width ?? 1024) / 16) * 16
+            let height = ((t2i.height ?? 1024) / 16) * 16
+            let steps = t2i.steps ?? configuration.defaultSteps
+            let guidance = Float(t2i.guidanceScale ?? configuration.defaultGuidanceScale)
+            prof.beginRun("z-image textToImage steps=\(steps) \(width)x\(height)")
+            let (pixels, w, h) = generator.generate(
+                prompt: t2i.prompt, negativePrompt: t2i.negativePrompt,
+                width: width, height: height, steps: steps, guidanceScale: guidance, seed: t2i.seed ?? 0)
+            prof.endRun(denominators: ["step": Double(steps)])
+            try Task.checkCancellation()
+            return T2IResponse(image: Image(format: .png, data: try Self.encodePNG(pixels: pixels, width: w, height: h), width: w, height: h))
+        }
+
+        if let edit = request as? IEditRequest, let first = edit.images.first {
+            let width = ((edit.width ?? 1024) / 16) * 16
+            let height = ((edit.height ?? 1024) / 16) * 16
+            let steps = edit.steps ?? configuration.defaultSteps
+            let guidance = Float(edit.guidanceScale ?? configuration.defaultGuidanceScale)
+            var strength: Float = 0.6
+            if case .double(let d)? = edit.metaData["strength"] { strength = Float(d) }
+            else if case .int(let n)? = edit.metaData["strength"] { strength = Float(n) }
+            let image = try Self.decodeInputImage(first, width: width, height: height)
+            prof.beginRun("z-image img2img strength=\(strength) steps=\(steps) \(width)x\(height)")
+            let (pixels, w, h) = generator.generateImg2Img(
+                prompt: edit.prompt, negativePrompt: edit.negativePrompt, image: image,
+                width: width, height: height, steps: steps, guidanceScale: guidance,
+                strength: strength, seed: edit.seed ?? 0)
+            prof.endRun(denominators: ["step": Double(steps)])
+            try Task.checkCancellation()
+            return IEditResponse(image: Image(format: .png, data: try Self.encodePNG(pixels: pixels, width: w, height: h), width: w, height: h))
+        }
+
+        throw PackageError.unsupportedCapability(request.capability)
+    }
+
+    /// Decode an input `Image` → [1,3,height,width] in [-1,1], scaled.
+    nonisolated static func decodeInputImage(_ image: Image, width: Int, height: Int) throws -> MLXArray {
+        guard let src = CGImageSourceCreateWithData(image.data as CFData, nil),
+              let cg = CGImageSourceCreateImageAtIndex(src, 0, nil)
+        else { throw ZImagePackageError.pngEncode }
+        let cs = CGColorSpace(name: CGColorSpace.sRGB)!
+        var buf = [UInt8](repeating: 0, count: width * height * 4)
+        let ctx = CGContext(data: &buf, width: width, height: height, bitsPerComponent: 8,
+            bytesPerRow: width * 4, space: cs, bitmapInfo: CGImageAlphaInfo.premultipliedLast.rawValue)!
+        ctx.draw(cg, in: CGRect(x: 0, y: 0, width: width, height: height))
+        var rgb = [Float](repeating: 0, count: 3 * width * height)
+        for p in 0..<(width * height) {
+            rgb[p] = Float(buf[p*4]) / 127.5 - 1
+            rgb[width*height + p] = Float(buf[p*4+1]) / 127.5 - 1
+            rgb[2*width*height + p] = Float(buf[p*4+2]) / 127.5 - 1
+        }
+        return MLXArray(rgb, [1, 3, height, width])
     }
 
     /// Read shift / use_dynamic_shifting from the snapshot's scheduler config (Base 6.0 / Turbo 3.0).

@@ -47,6 +47,16 @@ await package.unload()
 Base tier: `ZImageT2IPackage(configuration: .base(quant: .bf16, snapshotPath: ...))` — non-distilled,
 ~28-step with CFG + negative prompts; the quality / LoRA-substrate tier.
 
+**Image-to-image (v0.2.0):** both tiers also expose an `imageEdit` surface — re-generate from an
+input image conditioned on a prompt. `metaData["strength"]` (0–1, default 0.6) controls how much of
+the input is preserved vs redrawn. Encode → renoise at the strength-picked sigma → denoise.
+
+```swift
+let out = try await package.run(IEditRequest(
+    images: [inputImage], prompt: "...in an oil-painting style",
+    metaData: ["strength": .double(0.6)])) as! IEditResponse
+```
+
 ## Weights
 
 Published bf16 snapshots on Hugging Face (Apache-2.0), materialized automatically by the engine

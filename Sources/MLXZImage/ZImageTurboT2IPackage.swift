@@ -44,6 +44,12 @@ public final class ZImageTurboT2IPackage: ModelPackage {
                         + "photorealism + EN/CN text; ~13 s @1024² int4 on a 16 GB Mac. "
                         + "Note: low seed variance (a model trait, not a bug).",
                     modes: []
+                ),
+                IEditContract.descriptor(
+                    name: "z-image-turbo-img2img",
+                    summary: "Z-Image-Turbo image-to-image (Apache-2.0): fast re-generate from an "
+                        + "input image + prompt; metaData[\"strength\"] (0–1, default 0.6).",
+                    modes: []
                 )
             ]
         )
