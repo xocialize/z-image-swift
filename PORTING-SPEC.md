@@ -199,17 +199,20 @@ surface `z-image-turbo-t2i`). 6.15B single-stream S3-DiT + Qwen3-4B text encoder
       NOTE: v0.1.0 publishes bf16 + quantizes at load() (correct resident footprint;
       pre-quantized published repos = later download-size optimization).
 
-## Publish checklist (P8 remaining — WAITS FOR USER GO-AHEAD; outward-facing)
+## Publish — SHIPPED v0.1.0 (2026-07-06)
 
-- [ ] Convert + upload weights → mlx-community Collection "Z-Image (MLX)":
-      `Z-Image-Turbo-bf16` + `Z-Image-bf16` (full diffusers snapshots; int8/4 = later
-      pre-quant optimization). Verify neither name is already claimed.
-- [ ] Push code → `github.com/xocialize/z-image-swift`, tag `0.1.0`; flip the
-      mlx-engine-swift dep from a path to the tagged URL if needed; README + Quick Start.
-- [ ] Registry row → `mlx-engine-swift/docs/model-registry.md` (textToImage · Z-Image ·
-      base+turbo · xocialize · Avail/Val/Eff/Eng states).
-- [ ] In-app validation in MLXEngineImage (register → prepare → run → decode via the
-      shared harness) + phys-footprint re-baseline (smoke MLX-peak under-reads ~2.7×).
+- [x] Weights → mlx-community Collection "Z-Image (MLX)"
+      (`z-image-mlx-6a4bae170a9e0cf520bd2049`): `Z-Image-Turbo-bf16` (21 files, 19.1 GB) +
+      `Z-Image-bf16` (20 files, 19.1 GB), full diffusers snapshots + cards. Turbo transformer
+      converted fp32→bf16 (`publish_zimage.py`), verified renders clean before upload.
+      int8/int4 = later pre-quant download-size optimization.
+- [x] Code → `github.com/xocialize/z-image-swift` @ v0.1.0 (public). `Tests/` case fixed
+      for case-sensitive Linux clones.
+- [x] Registry row → branch `registry/z-image-textToImage` in mlx-engine-swift (pushed,
+      PR-ready; not merged to shared main — user merges).
+- [ ] REMAINING (later session): in-app validation in MLXEngineImage (register → prepare →
+      run → decode) + phys re-baseline (smoke under-reads ~2.7×) — Val 🟡 until then.
+      Plus the mflux-vs-Lens/ERNIE quality bench (own session, custom metrics).
 
 Lesson (harness): `String(format: "%s", swiftString)` in test prints segfaults xctest
 (signal 11) — looked exactly like a load/MLX crash. Use interpolation.
