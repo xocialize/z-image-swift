@@ -77,7 +77,7 @@ public final class ZImageT2IPackage: ModelPackage {
                 IEditContract.descriptor(
                     name: "z-image-img2img",
                     summary: "Z-Image image-to-image (Apache-2.0): re-generate from an input image "
-                        + "conditioned on a prompt; metaData[\"strength\"] (0–1, default 0.6) sets "
+                        + "conditioned on a prompt; metaData[\"strength\"] (0–1, default 0.75) sets "
                         + "how much of the input is preserved vs redrawn.",
                     modes: []
                 )
@@ -160,7 +160,11 @@ public final class ZImageT2IPackage: ModelPackage {
             let height = ((edit.height ?? 1024) / 16) * 16
             let steps = edit.steps ?? configuration.defaultSteps
             let guidance = Float(edit.guidanceScale ?? configuration.defaultGuidanceScale)
-            var strength: Float = 0.6
+            // Default strength 0.75 — a more useful midpoint than diffusers' 0.6: on the distilled
+            // Turbo, 0.6 barely moves global/time-of-day edits (the preserved low-freq wins), while
+            // 0.75 gives visible change on most prompts and still holds composition. Dramatic
+            // environment swaps (e.g. day→night) still want ~0.9; callers override via metaData.
+            var strength: Float = 0.75
             if case .double(let d)? = edit.metaData["strength"] { strength = Float(d) }
             else if case .int(let n)? = edit.metaData["strength"] { strength = Float(n) }
             let image = try Self.decodeInputImage(first, width: width, height: height)

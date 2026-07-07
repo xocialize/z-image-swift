@@ -48,7 +48,7 @@ public final class ZImageTurboT2IPackage: ModelPackage {
                 IEditContract.descriptor(
                     name: "z-image-turbo-img2img",
                     summary: "Z-Image-Turbo image-to-image (Apache-2.0): fast re-generate from an "
-                        + "input image + prompt; metaData[\"strength\"] (0–1, default 0.6).",
+                        + "input image + prompt; metaData[\"strength\"] (0–1, default 0.75).",
                     modes: []
                 )
             ]

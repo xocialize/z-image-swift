@@ -47,21 +47,24 @@ await package.unload()
 Base tier: `ZImageT2IPackage(configuration: .base(quant: .bf16, snapshotPath: ...))` — non-distilled,
 ~28-step with CFG + negative prompts; the quality / LoRA-substrate tier.
 
-**Image-to-image (v0.2.1):** both tiers also expose an `imageEdit` surface — re-generate from an
-input image conditioned on a prompt. `metaData["strength"]` (0–1, default 0.6) controls how much of
-the input is preserved vs redrawn. Encode → renoise at the strength-picked sigma → denoise. Low
-strength preserves structure (ideal for weather / lighting / restyle); high strength redraws freely.
+**Image-to-image (v0.2.2):** both tiers also expose an `imageEdit` surface — re-generate from an
+input image conditioned on a prompt. `metaData["strength"]` (0–1, **default 0.75**) controls how much
+of the input is preserved vs redrawn. Encode → renoise at the strength-picked sigma → denoise. As a
+rough guide: **~0.5** relight/restyle (holds everything), **~0.75** visible edit + composition kept
+(the default), **~0.9** new environment / time-of-day swaps (subject also redraws — e.g. day→night).
 
-> **v0.2.1 fix:** the `strength → t_start` step count now floors the *difference* exactly like
-> diffusers (`int(steps − steps·strength)`), not the product. The prior off-by-one started one
-> denoise step late — too little injected noise for the distilled 8-step Turbo to escape the input,
-> so edits at the default 0.6 came back near-identity. Now 0.6 applies the prompt while preserving
-> composition.
+> **v0.2.1 fix + v0.2.2 default:** the `strength → t_start` step count floors the *difference* exactly
+> like diffusers (`int(steps − steps·strength)`), not the product — the prior off-by-one started one
+> denoise step late, so edits came back near-identity on the distilled 8-step Turbo. v0.2.2 also raises
+> the default strength from diffusers' 0.6 to **0.75**: on Turbo, 0.6 barely moves global edits (the
+> preserved low-frequency content wins), while 0.75 gives a visible edit on most prompts and still
+> holds composition.
 
 ```swift
 let out = try await package.run(IEditRequest(
     images: [inputImage], prompt: "...in an oil-painting style",
-    metaData: ["strength": .double(0.6)])) as! IEditResponse
+    metaData: ["strength": .double(0.9)]))  // omit for the 0.75 default; raise for scene swaps
+    as! IEditResponse
 ```
 
 ## Weights

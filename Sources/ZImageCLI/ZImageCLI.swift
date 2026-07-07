@@ -201,9 +201,9 @@ struct ZImageCLI {
             print("[cli] injected init_latents from \(goldenLatents)")
         }
 
-        // --img2img <input.png> [--strength 0.6]: encode the input → clean latent, renoise+denoise.
+        // --img2img <input.png> [--strength 0.75]: encode the input → clean latent, renoise+denoise.
         var img2imgClean: MLXArray? = nil
-        let strength = Float(opt("--strength") ?? "0.6")!
+        let strength = Float(opt("--strength") ?? "0.75")!
         if let imgPath = opt("--img2img") {
             let cs = CGColorSpace(name: CGColorSpace.sRGB)!
             let src = CGImageSourceCreateWithURL(URL(fileURLWithPath: imgPath) as CFURL, nil)!
