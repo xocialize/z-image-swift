@@ -26,8 +26,9 @@ let package = Package(
         // Shared env-gated performance instrument (MLX_PROFILE=1); zero overhead when unset.
         .package(url: "https://github.com/xocialize/mlx-profiling.git", from: "0.1.0"),
         // MLXEngine contract (MLXToolKit) for the wrapper target only; the core `ZImage`
-        // target stays engine-agnostic.
-        .package(url: "https://github.com/xocialize/mlx-engine-swift", from: "0.21.0"),
+        // target stays engine-agnostic. ≥0.27.0 for the CAN cancellation gate
+        // (MLXServeConformance.CancellationConformance).
+        .package(url: "https://github.com/xocialize/mlx-engine-swift", from: "0.27.0"),
     ],
     targets: [
         .target(

@@ -137,8 +137,13 @@ public final class ZImageT2IPackage: ModelPackage {
     }
 
     public func run(_ request: any CapabilityRequest) async throws -> any CapabilityResponse {
-        guard let generator else { throw PackageError.notLoaded }
+        // CAN-1: the entry checkpoint is the FIRST act of run() — before notLoaded validation
+        // (engine ≥ 0.27.0). Mid-run cadence: the core's denoise loop bails per step
+        // (`Task.isCancelled` break in ZImagePipeline.generate), a cancelled task skips the
+        // VAE decode, and the post-generate checkpoints below rethrow CancellationError
+        // unchanged (never wrapped in ZImagePackageError).
         try Task.checkCancellation()
+        guard let generator else { throw PackageError.notLoaded }
         let prof = MLXProfiler.shared
 
         if let t2i = request as? T2IRequest {

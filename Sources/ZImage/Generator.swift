@@ -52,7 +52,10 @@ public final class ZImageGenerator {
             seed: seed, transformerDtype: transformerDtype,
             onStep: onStep)
 
-        return Self.toPixels(result.image![0], width, height)
+        // image is nil only when the run's task was cancelled (decode skipped); the engine
+        // wrapper's post-call checkpoint rethrows before these pixels are consumed.
+        guard let image = result.image else { return ([], width, height) }
+        return Self.toPixels(image[0], width, height)
     }
 
     /// img2img: `image` [1,3,H,W] in [-1,1] → clean latent (VAE encode) → renoise at `strength` →
@@ -73,7 +76,9 @@ public final class ZImageGenerator {
             numInferenceSteps: steps, guidanceScale: guidanceScale, negativePrompt: negativePrompt,
             seed: seed, img2imgCleanLatent: clean, strength: strength,
             transformerDtype: transformerDtype, onStep: onStep)
-        return Self.toPixels(result.image![0], width, height)
+        // Cancelled-task decode skip — see generate().
+        guard let image = result.image else { return ([], width, height) }
+        return Self.toPixels(image[0], width, height)
     }
 
     /// [-1,1] NCHW [3,H,W] → interleaved RGB8.

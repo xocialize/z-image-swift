@@ -122,6 +122,9 @@ public enum ZImagePipeline {
 
         let timesteps = scheduler.timesteps
         for (i, t) in timesteps.enumerated() {
+            // Cooperative cancellation: bail per denoise step (non-throwing core API — the
+            // MLXZImage wrapper's post-call `try Task.checkCancellation()` rethrows).
+            if Task.isCancelled { break }
             if i < startStep { continue }   // img2img: skip the pre-start steps
             // skip computation when t == 0 on the last step
             if t == 0 && i == timesteps.count - 1 { continue }
@@ -171,7 +174,9 @@ public enum ZImagePipeline {
             onStep?(i + 1, timesteps.count)
         }
 
-        guard decodeImage, let vae else {
+        // A cancelled task skips the VAE decode (pre-decode seam) — latents-only result;
+        // callers on a cancelled task never consume the image.
+        guard decodeImage, let vae, !Task.isCancelled else {
             return GenerateResult(latents: latents, image: nil)
         }
 
