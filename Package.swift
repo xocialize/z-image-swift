@@ -29,6 +29,8 @@ let package = Package(
         // target stays engine-agnostic. ≥0.27.0 for the CAN cancellation gate
         // (MLXServeConformance.CancellationConformance).
         .package(url: "https://github.com/xocialize/mlx-engine-swift", from: "0.27.0"),
+        // Auto-materialization downloader (v0.19.0 WeightSourcing contract, wrapper target only).
+        .package(url: "https://github.com/huggingface/swift-huggingface", from: "0.9.0"),
     ],
     targets: [
         .target(
@@ -54,6 +56,7 @@ let package = Package(
                 .product(name: "MLXToolKit", package: "mlx-engine-swift"),
                 .product(name: "MLXProfiling", package: "mlx-profiling"),
                 .product(name: "Tokenizers", package: "swift-transformers"),
+                .product(name: "HuggingFace", package: "swift-huggingface"),
             ],
             path: "Sources/MLXZImage"
         ),
