@@ -68,8 +68,10 @@ final class MaterializationTests: XCTestCase {
         let cfg = ZImageConfiguration.turbo()   // bf16 → one snapshot source
         // Empty store: the snapshot is missing.
         XCTAssertEqual(cfg.missingWeightSources(storeRoot: root).count, 1)
-        // Populate the expected store layout (<root>/<org>/<name>/{transformer,vae}).
-        let dir = root.appending(path: "mlx-community/Z-Image-Turbo-bf16")
+        // Populate the expected store layout — path from ModelStore so the fixture
+        // tracks the engine's canonical models--org--name layout (contract 1.22.0)
+        // instead of a stale literal.
+        let dir = ModelStore(root: root).directory(for: "mlx-community/Z-Image-Turbo-bf16")!
         for sub in ["transformer", "vae"] {
             try FileManager.default.createDirectory(
                 at: dir.appending(path: sub), withIntermediateDirectories: true)

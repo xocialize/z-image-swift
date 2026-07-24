@@ -26,11 +26,10 @@ let package = Package(
         // Shared env-gated performance instrument (MLX_PROFILE=1); zero overhead when unset.
         .package(url: "https://github.com/xocialize/mlx-profiling.git", from: "0.1.0"),
         // MLXEngine contract (MLXToolKit) for the wrapper target only; the core `ZImage`
-        // target stays engine-agnostic. ≥0.27.0 for the CAN cancellation gate
-        // (MLXServeConformance.CancellationConformance).
-        .package(url: "https://github.com/xocialize/mlx-engine-swift", from: "0.27.0"),
-        // Auto-materialization downloader (v0.19.0 WeightSourcing contract, wrapper target only).
-        .package(url: "https://github.com/huggingface/swift-huggingface", from: "0.9.0"),
+        // target stays engine-agnostic. ≥0.32.0 for engine-executed first-run
+        // materialization (contract 1.24.0); the package no longer carries its own
+        // WeightMaterializer.
+        .package(url: "https://github.com/xocialize/mlx-engine-swift", from: "0.32.0"),
     ],
     targets: [
         .target(
@@ -56,7 +55,6 @@ let package = Package(
                 .product(name: "MLXToolKit", package: "mlx-engine-swift"),
                 .product(name: "MLXProfiling", package: "mlx-profiling"),
                 .product(name: "Tokenizers", package: "swift-transformers"),
-                .product(name: "HuggingFace", package: "swift-huggingface"),
             ],
             path: "Sources/MLXZImage"
         ),
@@ -72,6 +70,8 @@ let package = Package(
                 .product(name: "MLXToolKit", package: "mlx-engine-swift"),
                 // The engine's executable MAT gate, run from this package's own suite.
                 .product(name: "MLXServeConformance", package: "mlx-engine-swift"),
+                // The engine itself, for the live prepare()-materializes gate (ZIMAGE_MAT_E2E=1).
+                .product(name: "MLXServeCore", package: "mlx-engine-swift"),
             ],
             path: "Tests/MLXZImageTests"
         ),
