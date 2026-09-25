@@ -95,5 +95,42 @@ pre-quantized repos are a later download-size optimization). Upstream:
   (offline MAT + conformance, no weights).
 - Parity/GPU gates need the weights + goldens: `ZIMAGE_PARITY=1 swift test` (fp32/CPU), and the
   GPU lane via `swift run -c release zimage-cli` (`--quant-gate 8,4`, `--pkg-e2e turbo --quant 4`, …).
+- VAE GPU lane: `swift test --filter WinogradProbeTests` is weight-free. `ZIMAGE_PARITY=1
+  ZIMAGE_SNAPSHOT=<Z-Image-Turbo> swift test -c release -Xswiftc -enable-testing --filter
+  P3bVAEGPULaneTests` compares both lanes (see below).
+
+## GPU numerics: the AE's 3×3 convs (2026-09-24)
+
+mlx's Metal `conv2d` takes a Winograd F(6×6,3×3) path when the conv is 3×3, stride 1, dilation 1,
+groups 1, C % 32 == 0, O % 32 == 0, C + O ≥ 256 and N·H·W ≥ 4096. On M5 that path loses precision:
+about 6.4e-3 relL2 per conv in fp32, because its inner GEMM runs TF32, and about 5.8e-2 in bf16.
+
+In the FLUX.1 AE, almost every 3×3 conv qualifies at ≥512²: at 1024² that is 31 decoder convs and 21
+encoder convs. The old P3 gate pinned the CPU device, so the GPU lane had never been gated. Every
+stride-1 3×3 conv is now a `WinogradFreeConv2d`, which routes only the in-window shapes through
+`conv3d` with kT = 1.
+
+Measurements: 1024² DIV2K photo, each path against the CPU-lane fp32 result, M5 Max, mlx-swift 0.31.6.
+
+| | Raw conv2d (Winograd) | conv3d route |
+|---|---|---|
+| Encode (img2img clean latent), GPU fp32 | **2.2e-2** · max 2.2 | 3.7e-4 · max 0.13 |
+| Decode, GPU fp32 | 1.3e-3 · 70.0 dB · max 1.35e-2 | **2.0e-5 · 106.5 dB** |
+| Decode, GPU bf16 | 1.2e-2 · 50.8 dB · max 0.124 | 3.8e-3 · 60.8 dB · max 0.028 |
+| Decode time, fp32 / bf16 | 580 ms / 340 ms | **+463 ms / +622 ms** |
+| Encode time, fp32 / bf16 | 319 ms / 184 ms | +173 ms / +321 ms |
+
+Times are isolated GPU runs at 1024², median of 3 interleaved rounds.
+
+- **The route is not cheap here.** Implicit-GEMM convs are 1.3–4× slower than Winograd at 256- and
+  512-channel shapes.
+- **The fp32 decode loss is below 8-bit visibility**: at most 2 levels on a [0, 255] output, while
+  8-bit quantization alone is about 59 dB on this metric. The route removes it at +80% decode time.
+- **The encoder loss is material**: 2.2e-2 in the latent that seeds img2img.
+- To opt out, set `vae.winogradFreeConvs = false` or `ZIMAGE_VAE_WINOGRAD=1`.
+- With `MLX_ENABLE_TF32=0`, raw Winograd is exact too: decode is 1.0e-5 on both paths. That is the
+  cheaper way to run a GPU parity lane.
+- The encoder's remaining ~3.5e-4 against the CPU lane stays the same with Winograd and TF32 both
+  off, so it is unrelated to this window. It is an open item.
 
 License: port code MIT; model weights Apache-2.0 (Tongyi-MAI).
