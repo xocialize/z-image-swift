@@ -51,12 +51,15 @@ final class P3bVAEGPULaneTests: XCTestCase {
         }
     }
 
-    /// GPU run with the route on/off; warm-up, then the mean of `reps` timed runs.
+    /// GPU run with both encoder and decoder on `route` (true = .conv3d, false = .winograd);
+    /// warm-up, then the mean of `reps` timed runs.
     static func gpuRun(_ vae: AutoencoderKL, route: Bool, reps: Int = 3, _ f: () -> MLXArray)
         -> (MLXArray, Double)
     {
-        vae.winogradFreeConvs = route
-        defer { vae.winogradFreeConvs = true }
+        let saved = (vae.encoderConvRoute, vae.decoderConvRoute)
+        vae.encoderConvRoute = route ? .conv3d : .winograd
+        vae.decoderConvRoute = route ? .conv3d : .winograd
+        defer { (vae.encoderConvRoute, vae.decoderConvRoute) = saved }
         var out = f()
         eval(out)
         let t0 = Date()
@@ -166,5 +169,21 @@ final class P3bVAEGPULaneTests: XCTestCase {
                          fmt(enc[0]), fmt(enc[1]), median(enc[0]) - median(enc[1])))
             Memory.clearCache()
         }
+    }
+
+    /// Encoder at 512², where the CPU lane's GroupNorm error is ~10× smaller than at 1024².
+    func testEncode512() throws {
+        try XCTSkipUnless(Self.env["ZIMAGE_PARITY"] == "1", "set ZIMAGE_PARITY=1 to run")
+        let snapshot = try XCTUnwrap(Self.env["ZIMAGE_SNAPSHOT"], "set ZIMAGE_SNAPSHOT")
+        let vae = try ZImageWeights.loadVAE(snapshotPath: snapshot, dtype: .float32)
+        let pixels = try Self.loadCrop(Self.realImage, side: 512)
+        let lc = vae.latentChannels
+        let ref = Self.onCPU { vae.encodeMoments(pixels) }[0..., ..<lc, 0..., 0...]
+        let (r, _) = Self.gpuRun(vae, route: true) { vae.encodeMoments(pixels) }
+        let (w, _) = Self.gpuRun(vae, route: false) { vae.encodeMoments(pixels) }
+        let sr = Self.stats(r[0..., ..<lc, 0..., 0...], ref)
+        let sw = Self.stats(w[0..., ..<lc, 0..., 0...], ref)
+        print(String(format: "[512² encode vs CPU lane] route relL2 %.2e max %.2e | raw relL2 %.2e max %.2e",
+                     sr.relL2, sr.maxAbs, sw.relL2, sw.maxAbs))
     }
 }

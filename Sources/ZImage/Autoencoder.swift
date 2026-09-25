@@ -11,8 +11,9 @@
 // tensors enter/exit decode()/encodeMoments() in NCHW (diffusers convention).
 //
 // Every stride-1 3×3 conv is a WinogradFreeConv2d: at ≥512² nearly all of them fall inside mlx's
-// lossy Winograd conv2d window, and the class reroutes exactly those shapes through conv3d
-// (kT = 1). Numbers and removal path: WinogradFreeConv2d.swift, README "GPU numerics".
+// lossy Winograd conv2d window. The encoder reroutes those shapes through conv3d (kT = 1) by
+// default; the decoder keeps mlx's Winograd path unless asked (`decoderConvRoute`). Numbers and
+// removal path: WinogradFreeConv2d.swift, README "GPU numerics".
 
 import Foundation
 import MLX
@@ -304,15 +305,34 @@ public final class AutoencoderKL: Module {
             cfg.outChannels, cfg.latentChannels, cfg.blockOutChannels,
             layersPerBlock: cfg.layersPerBlock, groups: cfg.normNumGroups, eps: eps)
         super.init()
+        decoderConvRoute = .winograd
+        if let route = ZImageVAEConvRoute.environmentOverride {
+            encoderConvRoute = route
+            decoderConvRoute = route
+        }
     }
 
-    /// Whether in-window 3×3 convs take the exact conv3d route (default) instead of mlx's lossy
-    /// Winograd conv2d. `false` is for A/B validation only (WinogradFreeConv2d.swift).
-    public var winogradFreeConvs: Bool {
-        get { modules().allSatisfy { ($0 as? WinogradFreeConv2d)?.enabled ?? true } }
-        set {
-            for case let conv as WinogradFreeConv2d in modules() { conv.enabled = newValue }
-        }
+    /// Route for the encoder's in-window 3×3 convs (WinogradFreeConv2d.swift). Default `.conv3d`:
+    /// the raw Winograd loss is material here (2.2e-2 in the img2img latent at 1024²).
+    public var encoderConvRoute: ZImageVAEConvRoute {
+        get { Self.route(of: encoder) }
+        set { Self.setRoute(newValue, in: encoder) }
+    }
+
+    /// Route for the decoder's in-window 3×3 convs. Default `.winograd`: its fp32 loss is below
+    /// 8-bit visibility (70 dB, ≤2 levels) and `.conv3d` costs +463 ms per 1024² decode — parity
+    /// lanes opt in with `.conv3d`.
+    public var decoderConvRoute: ZImageVAEConvRoute {
+        get { Self.route(of: decoder) }
+        set { Self.setRoute(newValue, in: decoder) }
+    }
+
+    static func route(of m: Module) -> ZImageVAEConvRoute {
+        m.modules().lazy.compactMap { ($0 as? WinogradFreeConv2d)?.route }.first ?? .winograd
+    }
+
+    static func setRoute(_ route: ZImageVAEConvRoute, in m: Module) {
+        for case let conv as WinogradFreeConv2d in m.modules() { conv.route = route }
     }
 
     /// Raw moments (mean, logvar concatenated on channel), NCHW in / NCHW out.

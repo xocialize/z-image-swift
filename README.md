@@ -107,8 +107,9 @@ about 6.4e-3 relL2 per conv in fp32, because its inner GEMM runs TF32, and about
 
 In the FLUX.1 AE, almost every 3×3 conv qualifies at ≥512²: at 1024² that is 31 decoder convs and 21
 encoder convs. The old P3 gate pinned the CPU device, so the GPU lane had never been gated. Every
-stride-1 3×3 conv is now a `WinogradFreeConv2d`, which routes only the in-window shapes through
-`conv3d` with kT = 1.
+stride-1 3×3 conv is now a `WinogradFreeConv2d` with a route (`ZImageVAEConvRoute`): `.conv3d`
+(exact, implicit GEMM), `.winograd` (mlx's raw path), or `.fp32Winograd` (bf16 upcast). Shapes
+outside the window always take plain conv2d. **Defaults: encoder `.conv3d`, decoder `.winograd`.**
 
 Measurements: 1024² DIV2K photo, each path against the CPU-lane fp32 result, M5 Max, mlx-swift 0.31.6.
 
@@ -125,12 +126,17 @@ Times are isolated GPU runs at 1024², median of 3 interleaved rounds.
 - **The route is not cheap here.** Implicit-GEMM convs are 1.3–4× slower than Winograd at 256- and
   512-channel shapes.
 - **The fp32 decode loss is below 8-bit visibility**: at most 2 levels on a [0, 255] output, while
-  8-bit quantization alone is about 59 dB on this metric. The route removes it at +80% decode time.
-- **The encoder loss is material**: 2.2e-2 in the latent that seeds img2img.
-- To opt out, set `vae.winogradFreeConvs = false` or `ZIMAGE_VAE_WINOGRAD=1`.
+  8-bit quantization alone is about 59 dB on this metric. The route would remove it at +80% decode
+  time, so the decoder keeps mlx's path by default. Parity lanes opt in with
+  `vae.decoderConvRoute = .conv3d`.
+- **The encoder loss is material**: 2.2e-2 in the latent that seeds img2img. The encoder routes by
+  default (`vae.encoderConvRoute`).
+- `ZIMAGE_VAE_CONV_ROUTE=winograd|conv3d|fp32Winograd` overrides both defaults.
 - With `MLX_ENABLE_TF32=0`, raw Winograd is exact too: decode is 1.0e-5 on both paths. That is the
   cheaper way to run a GPU parity lane.
-- The encoder's remaining ~3.5e-4 against the CPU lane stays the same with Winograd and TF32 both
-  off, so it is unrelated to this window. It is an open item.
+- At 512² the encoder route is 6.5e-5 from the CPU lane (1.6e-5 with TF32 off), while raw
+  Winograd is 1.7e-2. Most of the ~3.5e-4 left at 1024² is error in the CPU reference itself: its
+  fp32 GroupNorm drifts with group size, to 8e-5 per full-resolution norm at 1024² against float64,
+  where the GPU's stays at ~1e-7.
 
 License: port code MIT; model weights Apache-2.0 (Tongyi-MAI).
