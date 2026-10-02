@@ -11,6 +11,7 @@ import XCTest
 @testable import ZImage
 
 final class P3VAETests: XCTestCase {
+    override func invokeTest() { withMLXCPU { super.invokeTest() } }
 
     static let goldensDir = URL(fileURLWithPath: #filePath)
         .deletingLastPathComponent().deletingLastPathComponent().deletingLastPathComponent()
@@ -27,7 +28,6 @@ final class P3VAETests: XCTestCase {
         try XCTSkipUnless(
             ProcessInfo.processInfo.environment["ZIMAGE_PARITY"] == "1",
             "set ZIMAGE_PARITY=1 to run the P3 gate")
-        Device.setDefault(device: .cpu)
         return try ZImageWeights.loadVAE(snapshotPath: Self.snapshotPath, dtype: .float32)
     }
 

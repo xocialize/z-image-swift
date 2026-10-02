@@ -10,6 +10,7 @@ import XCTest
 @testable import ZImage
 
 final class P2DiTParityTests: XCTestCase {
+    override func invokeTest() { withMLXCPU { super.invokeTest() } }
 
     static let goldensDir = URL(fileURLWithPath: #filePath)
         .deletingLastPathComponent().deletingLastPathComponent().deletingLastPathComponent()
@@ -25,7 +26,6 @@ final class P2DiTParityTests: XCTestCase {
     // Lazy static — loads once on first access from the test thread, shared by both cases.
     nonisolated(unsafe) static let model: ZImageTransformer2DModel? = {
         guard ProcessInfo.processInfo.environment["ZIMAGE_PARITY"] == "1" else { return nil }
-        Device.setDefault(device: .cpu)
         return try! ZImageWeights.loadTransformer(snapshotPath: snapshotPath, dtype: .float32)
     }()
 
@@ -33,7 +33,6 @@ final class P2DiTParityTests: XCTestCase {
         try XCTSkipUnless(
             ProcessInfo.processInfo.environment["ZIMAGE_PARITY"] == "1",
             "set ZIMAGE_PARITY=1 (and optionally ZIMAGE_SNAPSHOT) to run the P2 gate")
-        Device.setDefault(device: .cpu)
         return Self.model!
     }
 

@@ -9,17 +9,13 @@ import XCTest
 @testable import ZImage
 
 final class P1MathTests: XCTestCase {
+    override func invokeTest() { withMLXCPU { super.invokeTest() } }
 
     static let goldensDir = URL(fileURLWithPath: #filePath)
         .deletingLastPathComponent()   // ZImageTests
         .deletingLastPathComponent()   // Tests
         .deletingLastPathComponent()   // package root
         .appendingPathComponent("Tests/goldens")
-
-    override class func setUp() {
-        super.setUp()
-        Device.setDefault(device: .cpu)  // CPU stream for all parity (skill doctrine)
-    }
 
     func loadGoldens(_ name: String) throws -> [String: MLXArray] {
         let url = Self.goldensDir.appendingPathComponent(name)

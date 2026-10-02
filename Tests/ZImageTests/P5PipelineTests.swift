@@ -13,6 +13,7 @@ import XCTest
 @testable import ZImage
 
 final class P5PipelineTests: XCTestCase {
+    override func invokeTest() { withMLXCPU { super.invokeTest() } }
 
     static let goldensDir = URL(fileURLWithPath: #filePath)
         .deletingLastPathComponent().deletingLastPathComponent().deletingLastPathComponent()
@@ -33,7 +34,6 @@ final class P5PipelineTests: XCTestCase {
         try XCTSkipUnless(
             ProcessInfo.processInfo.environment["ZIMAGE_PARITY"] == "1",
             "set ZIMAGE_PARITY=1 to run the P5 gate")
-        Device.setDefault(device: .cpu)
 
         let g = try MLX.loadArrays(
             url: Self.goldensDir.appendingPathComponent("zimage_e2e_cpu_256_4step.safetensors"))

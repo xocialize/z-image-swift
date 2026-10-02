@@ -12,6 +12,7 @@ import XCTest
 @testable import ZImage
 
 final class P4EncoderTests: XCTestCase {
+    override func invokeTest() { withMLXCPU { super.invokeTest() } }
 
     static let goldensDir = URL(fileURLWithPath: #filePath)
         .deletingLastPathComponent().deletingLastPathComponent().deletingLastPathComponent()
@@ -32,7 +33,6 @@ final class P4EncoderTests: XCTestCase {
         try XCTSkipUnless(
             ProcessInfo.processInfo.environment["ZIMAGE_PARITY"] == "1",
             "set ZIMAGE_PARITY=1 to run the P4 gate")
-        Device.setDefault(device: .cpu)
         let encoder = try ZImageWeights.loadTextEncoder(
             snapshotPath: Self.snapshotPath, dtype: .float32)
         let tokenizerURL = URL(fileURLWithPath: Self.snapshotPath)
