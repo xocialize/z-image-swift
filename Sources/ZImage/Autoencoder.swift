@@ -280,9 +280,19 @@ final class VAEDecoder: Module {
     func callAsFunction(_ x: MLXArray) -> MLXArray {
         var h = convIn(x)
         h = midBlock(h)
-        for b in upBlocks { h = b(h) }
+        for b in upBlocks {
+            if stageEval { eval(h) }
+            h = b(h)
+        }
         return convOut(silu(convNormOut(h)))
     }
+
+    /// Realise the mid block and each up block before the next. Values are unchanged (max|Δ| 0);
+    /// the decode transient falls ~19% (P3c: 15.08 → 12.33 GB at 1024², 59.12 → 47.13 at 2048²).
+    /// As one lazy graph the up path dominates the decode, ahead of the mid attention's (h·w)²
+    /// scores, so chunking those (AB-L-0176) saves nothing here. The up path cannot be halo-tiled
+    /// exactly either: its GroupNorms take whole-frame statistics.
+    var stageEval = true
 }
 
 /// FLUX.1 VAE. encodeMoments()/decode() take and return NCHW (diffusers convention).

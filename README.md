@@ -99,6 +99,38 @@ pre-quantized repos are a later download-size optimization). Upstream:
   ZIMAGE_SNAPSHOT=<Z-Image-Turbo> swift test -c release -Xswiftc -enable-testing --filter
   P3bVAEGPULaneTests` compares both lanes (see below).
 
+## Decode memory (2026-10-07, AB-L-0176 audit)
+
+The AE decoder now evaluates the mid block and each up block before the next (`VAEDecoder.stageEval`).
+Values are unchanged (max|Δ| 0 at every size, byte-identical package PNGs).
+
+As one lazy graph, the up path held more live intermediates than it needed. That up path, not the mid
+attention's (h·w)² fp32 score matrix, is this decoder's peak. Chunking the attention's queries (the
+AB-L-0176 fix for Wan/Qwen-Image VAEs) was measured, bit-identical, and saved nothing:
+- 2048²: 59.1 → 60.2 GB without stage evals, and 47.1 → 49.3 GB with them.
+
+The up path cannot be halo-tiled exactly either, because its GroupNorms take whole-frame statistics.
+
+| fp32 decode, GPU (M5 Max), MLX transient | v0.5.0 (one graph) | v0.5.1 (stage eval) |
+|---|---|---|
+| 1024² | 15.08 GB | 12.33 GB |
+| 1536² | 33.80 GB | 27.67 GB |
+| 2048² | 59.12 GB | 47.13 GB |
+| 1440×2560 | 51.87 GB | 43.25 GB |
+
+Package e2e, Turbo at 1024² (`zimage-cli --pkg-e2e turbo`, MLX peak). Warm run time is 33.6 s on both
+tiers, against 42.9 s (int4) and 36.4 s (bf16) for v0.5.0:
+
+| Tier | v0.5.0 | v0.5.1 |
+|---|---|---|
+| int4 | 25,673 MiB | 23,060 MiB |
+| bf16 | 33,917 MiB | 31,304 MiB |
+
+⚠ Output size is uncapped and the declared activation was measured at 1024². Above that it
+under-declares (AB-L-0202): the decode alone is 27.7 GB at 1536² and 47.1 GB at 2048².
+
+Gate: `ZIMAGE_PARITY=1 ZIMAGE_SNAPSHOT=… swift test -c release -Xswiftc -enable-testing --filter P3cVAEDecodeMemoryTests`.
+
 ## GPU numerics: the AE's 3×3 convs (2026-09-24)
 
 mlx's Metal `conv2d` takes a Winograd F(6×6,3×3) path when the conv is 3×3, stride 1, dilation 1,

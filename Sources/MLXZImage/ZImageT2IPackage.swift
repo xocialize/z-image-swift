@@ -53,6 +53,14 @@ public final class ZImageT2IPackage: ModelPackage {
                 //  GPU-smoke figure; smoke MLX-peak under-reads process phys_footprint ~2.7×
                 //  (BiRefNet lesson) — FLAGGED for an in-app phys re-baseline once Z-Image is
                 //  registered in the MLXEngineImage app.]
+                // v0.5.1 (2026-10-07): per-stage evals in the AE decoder lowered the 1024² package
+                // peak by 2.6 GiB with byte-identical PNGs (int4 25,673 → 23,060 MiB; bf16 33,917 →
+                // 31,304 MiB). The rows are unchanged and now carry that margin.
+                // ⚠ Above 1024² these rows UNDER-declare (AB-L-0202): the AE decode transient alone
+                // is 27.7 GB at 1536² and 47.1 GB at 2048² (P3c, fp32), well over 14/20 GB. It is the
+                // up path, not the mid attention's (h·w)² scores; chunking those saved nothing
+                // (AB-L-0176 audit). Size is uncapped and the summary advertises 2048², so a cap or
+                // a per-size peakActivationBytesHint is owed.
                 footprints: [
                     QuantFootprint(quant: .bf16, residentBytes: 20_000_000_000,
                                    peakActivationBytes: 14_000_000_000),
