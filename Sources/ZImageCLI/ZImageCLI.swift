@@ -64,7 +64,8 @@ struct ZImageCLI {
 
         // P8 wrapper e2e: drive the real ModelPackage surface (load → run → decode) end to
         // end, proving the engine glue (config resolution, dtype/quant selection, T2IRequest
-        // plumbing, PNG encode), not just the raw pipeline. --pkg-e2e [turbo|base].
+        // plumbing, PNG encode), not just the raw pipeline. --pkg-e2e [turbo|base]
+        // [--quant 4|8] [--width W [--height H]] (default 1024²).
         if let tier = opt("--pkg-e2e") {
             let snapshot = opt("--snapshot") ?? (tier == "base"
                 ? defaultSnapshot.replacingOccurrences(of: "Z-Image-Turbo", with: "Z-Image")
@@ -81,13 +82,18 @@ struct ZImageCLI {
                   + "\(type(of: pkg).manifest.surfaces[0].name)")
             let t0 = Date()
             try await pkg.load()
-            print("[pkg-e2e] load: \(String(format: "%.2f", Date().timeIntervalSince(t0)))s")
+            MLX.Memory.clearCache()
+            print("[pkg-e2e] load: \(String(format: "%.2f", Date().timeIntervalSince(t0)))s; "
+                  + "resident \(MLX.Memory.activeMemory / (1 << 20))MB")
+            MLX.Memory.peakMemory = 0
             let prompt = opt("--prompt")
                 ?? "A lighthouse on a stormy coast at dusk, dramatic clouds, crashing waves, "
                 + "warm lamp glow, photorealistic"
             let t1 = Date()
+            let width = opt("--width").flatMap { Int($0) } ?? 1024
+            let height = opt("--height").flatMap { Int($0) } ?? width
             let resp = try await pkg.run(T2IRequest(
-                prompt: prompt, width: 1024, height: 1024, seed: 42)) as! T2IResponse
+                prompt: prompt, width: width, height: height, seed: 42)) as! T2IResponse
             print("[pkg-e2e] run: \(String(format: "%.2f", Date().timeIntervalSince(t1)))s "
                   + "→ \(resp.image.width)x\(resp.image.height) \(resp.image.data.count) bytes "
                   + "(.\(resp.image.format))")

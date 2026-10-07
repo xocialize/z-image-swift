@@ -20,16 +20,16 @@ public final class ZImageTurboT2IPackage: ModelPackage {
                 sourceRepo: "Tongyi-MAI/Z-Image-Turbo", revision: "main", tier: 1),
             requirements: RequirementsManifest(
                 // Architecture-identical to base Z-Image → same split envelope (delegates to the
-                // same inner ZImageT2IPackage / shared ZImageGenerator core). Resident + activation
-                // measured via zimage-cli (int4 1024²/8-step: 25.7 GB peak, DiT 3.5 GB;
-                // bf16: 33.9 GB peak, DiT 11.7 GB). See ZImageT2IPackage for the split rationale.
+                // same inner ZImageT2IPackage / shared ZImageGenerator core). Re-measured 2026-10-07
+                // at the 1536² cap: Turbo's resident and peak match base's on every tier (the AE
+                // decode sets the activation; CFG does not move it). See ZImageT2IPackage.
                 footprints: [
-                    QuantFootprint(quant: .bf16, residentBytes: 20_000_000_000,
-                                   peakActivationBytes: 14_000_000_000),
+                    QuantFootprint(quant: .bf16, residentBytes: 20_500_000_000,
+                                   peakActivationBytes: 28_000_000_000),
                     QuantFootprint(quant: .int8, residentBytes: 15_000_000_000,
-                                   peakActivationBytes: 14_000_000_000),
-                    QuantFootprint(quant: .int4, residentBytes: 6_000_000_000,
-                                   peakActivationBytes: 20_000_000_000),
+                                   peakActivationBytes: 28_000_000_000),
+                    QuantFootprint(quant: .int4, residentBytes: 11_900_000_000,
+                                   peakActivationBytes: 28_000_000_000),
                 ],
                 requiredBackends: [.metalGPU],
                 os: OSRequirement(minMacOS: SemanticVersion(major: 26, minor: 0, patch: 0)),

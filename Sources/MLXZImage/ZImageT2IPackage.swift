@@ -20,11 +20,17 @@ import ZImage
 public enum ZImagePackageError: Error, LocalizedError {
     case unreadableSnapshot(String)
     case pngEncode
+    /// Output size outside the measured envelope: area above `ZImageT2IPackage.maxOutputPixels`
+    /// (1536²), or a side under 16 px.
+    case sizeOutOfEnvelope(width: Int, height: Int)
 
     public var errorDescription: String? {
         switch self {
         case .unreadableSnapshot(let p): return "Z-Image snapshot not readable at \(p)."
         case .pngEncode: return "PNG encoding failed."
+        case .sizeOutOfEnvelope(let w, let h):
+            return "Z-Image output \(w)×\(h) is outside the supported envelope "
+                + "(each side ≥ 16 px, area ≤ 1536×1536)."
         }
     }
 }
@@ -40,34 +46,26 @@ public final class ZImageT2IPackage: ModelPackage {
             license: LicenseDeclaration(weightLicense: .apache2, portCodeLicense: .mit),
             provenance: Provenance(sourceRepo: "Tongyi-MAI/Z-Image", revision: "main", tier: 1),
             requirements: RequirementsManifest(
-                // Split footprint (efficiency contract 1.14.0). Resident floor = DiT + VAE +
-                // Qwen3-4B encoder (all co-resident — encoder is small enough here that per-stage
-                // eviction isn't warranted, unlike ERNIE's Mistral-3B). Measured on-disk / active:
-                //   bf16: DiT 11.7 GB + encoder ~8 GB + VAE ~0.3 GB ≈ 20 GB resident.
-                //   int8: DiT 6.4 GB + encoder ~8 GB (bf16) + VAE 0.3 ≈ 15 GB.
-                //   int4: DiT 3.5 GB + encoder ~2.3 GB (int4) + VAE 0.3 ≈ 6 GB.
-                // Activation = denoise + VAE-decode scratch at 1024²; GPU peak MEASURED via
-                // zimage-cli: bf16 render peak 33.9 GB (act ≈ 14 GB over the 20 GB floor),
-                // int4 peak 25.7 GB (act ≈ 20 GB — decode conv scratch dominates on int4).
-                // [residentBytes = measured active post-load (solid). peakActivationBytes is a
-                //  GPU-smoke figure; smoke MLX-peak under-reads process phys_footprint ~2.7×
-                //  (BiRefNet lesson) — FLAGGED for an in-app phys re-baseline once Z-Image is
-                //  registered in the MLXEngineImage app.]
-                // v0.5.1 (2026-10-07): per-stage evals in the AE decoder lowered the 1024² package
-                // peak by 2.6 GiB with byte-identical PNGs (int4 25,673 → 23,060 MiB; bf16 33,917 →
-                // 31,304 MiB). The rows are unchanged and now carry that margin.
-                // ⚠ Above 1024² these rows UNDER-declare (AB-L-0202): the AE decode transient alone
-                // is 27.7 GB at 1536² and 47.1 GB at 2048² (P3c, fp32), well over 14/20 GB. It is the
-                // up path, not the mid attention's (h·w)² scores; chunking those saved nothing
-                // (AB-L-0176 audit). Size is uncapped and the summary advertises 2048², so a cap or
-                // a per-size peakActivationBytesHint is owed.
+                // Split footprint (efficiency contract 1.14.0), re-measured 2026-10-07 (AB-T-0204) with
+                // `zimage-cli --pkg-e2e` (M5 Max, MLX active/peak, Release, v0.5.2):
+                //   resident = MLX active after load() (DiT + bf16 Qwen3-4B encoder + fp32 VAE; the
+                //   encoder is bf16 on every tier — only the DiT is quantized):
+                //     bf16 19,539 MiB (20.49 GB) · int8 14,163 MiB (14.85 GB) · int4 11,295 MiB (11.84 GB)
+                //     (the old int4 row's 6 GB assumed an int4 encoder that was never shipped).
+                //   activation = peak − resident, IDENTICAL on every tier and on base (CFG) and Turbo —
+                //     the fp32 AE decode sets it (P3c: 12.33 GB at 1024², 27.67 GB at 1536²):
+                //     1024²: 11,765 MiB (12.34 GB) · 1536²: 26,395 MiB (27.68 GB).
+                // Declared at the cap, 1536² (`maxOutputPixels`; run() throws above it), so every
+                // admitted request fits the reserve — a 1024² request over-reserves ~15 GB, the price of
+                // one quant-keyed row covering the size range (AB-L-0202).
+                // [MLX-peak, not in-app phys_footprint — the in-app re-baseline (AB-T-0019) is still owed.]
                 footprints: [
-                    QuantFootprint(quant: .bf16, residentBytes: 20_000_000_000,
-                                   peakActivationBytes: 14_000_000_000),
+                    QuantFootprint(quant: .bf16, residentBytes: 20_500_000_000,
+                                   peakActivationBytes: 28_000_000_000),
                     QuantFootprint(quant: .int8, residentBytes: 15_000_000_000,
-                                   peakActivationBytes: 14_000_000_000),
-                    QuantFootprint(quant: .int4, residentBytes: 6_000_000_000,
-                                   peakActivationBytes: 20_000_000_000),
+                                   peakActivationBytes: 28_000_000_000),
+                    QuantFootprint(quant: .int4, residentBytes: 11_900_000_000,
+                                   peakActivationBytes: 28_000_000_000),
                 ],
                 requiredBackends: [.metalGPU],
                 os: OSRequirement(minMacOS: SemanticVersion(major: 26, minor: 0, patch: 0)),
@@ -79,7 +77,7 @@ public final class ZImageT2IPackage: ModelPackage {
                     name: "z-image-t2i",
                     summary: "Z-Image 6B single-stream S3-DiT text-to-image (Apache-2.0): the "
                         + "quality/LoRA tier — non-distilled ~28-step with CFG + negative "
-                        + "prompts, strong photorealism and EN/CN text rendering, 512²–2048².",
+                        + "prompts, strong photorealism and EN/CN text rendering, 512²–1536² (by area).",
                     modes: []
                 ),
                 IEditContract.descriptor(
@@ -157,8 +155,7 @@ public final class ZImageT2IPackage: ModelPackage {
         let prof = MLXProfiler.shared
 
         if let t2i = request as? T2IRequest {
-            let width = ((t2i.width ?? 1024) / 16) * 16
-            let height = ((t2i.height ?? 1024) / 16) * 16
+            let (width, height) = try Self.outputSize(t2i.width, t2i.height)
             let steps = t2i.steps ?? configuration.defaultSteps
             let guidance = Float(t2i.guidanceScale ?? configuration.defaultGuidanceScale)
             prof.beginRun("z-image textToImage steps=\(steps) \(width)x\(height)")
@@ -171,8 +168,7 @@ public final class ZImageT2IPackage: ModelPackage {
         }
 
         if let edit = request as? IEditRequest, let first = edit.images.first {
-            let width = ((edit.width ?? 1024) / 16) * 16
-            let height = ((edit.height ?? 1024) / 16) * 16
+            let (width, height) = try Self.outputSize(edit.width, edit.height)
             let steps = edit.steps ?? configuration.defaultSteps
             let guidance = Float(edit.guidanceScale ?? configuration.defaultGuidanceScale)
             // Default strength 0.75 — a more useful midpoint than diffusers' 0.6: on the distilled
@@ -194,6 +190,24 @@ public final class ZImageT2IPackage: ModelPackage {
         }
 
         throw PackageError.unsupportedCapability(request.capability)
+    }
+
+    /// Largest output area the declared footprints cover: 1536², the largest validated render and
+    /// the measured envelope. Memory grows with area, so the cap is on area and a non-square
+    /// request of the same area is admitted. Above it the AE decode alone reaches 47.1 GB at
+    /// 2048² (P3c, fp32), so the cap keeps every admitted request inside the declaration
+    /// (AB-L-0202, AB-T-0204).
+    public nonisolated static let maxOutputPixels = 1536 * 1536
+
+    /// Request size → the generated size: floored to multiples of 16 (default 1024), then checked
+    /// against the envelope. Throws `sizeOutOfEnvelope` instead of running out of memory.
+    nonisolated static func outputSize(_ width: Int?, _ height: Int?) throws -> (Int, Int) {
+        let w = ((width ?? 1024) / 16) * 16
+        let h = ((height ?? 1024) / 16) * 16
+        guard w >= 16, h >= 16, w * h <= maxOutputPixels else {
+            throw ZImagePackageError.sizeOutOfEnvelope(width: w, height: h)
+        }
+        return (w, h)
     }
 
     /// Decode an input `Image` → [1,3,height,width] in [-1,1], scaled.

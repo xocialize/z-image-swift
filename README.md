@@ -15,8 +15,8 @@ Two products:
 > **Status: complete · wrapped · GPU-validated.** Parity vs the PyTorch goldens (fp32/CPU stream):
 > DiT cosine **≥0.9999999** (both aligned + padded cases) · VAE decode **118 dB** · encoder token
 > ids **exact** + features cosine **1.0000000** · full-pipeline e2e **105–108 dB** (256²/CPU).
-> GPU bf16 1024²/8-step Turbo renders a sharp, prompt-faithful image in **~13 s** (25.7 GB peak at
-> int4 — a 16 GB-tier fit). Base + CFG (guidance 4.0, negative prompt) parity-locked at
+> GPU bf16 1024²/8-step Turbo renders a sharp, prompt-faithful image in **~13 s**. Output is capped
+> at 1536² by area, and the declared footprint covers it: int4 11.9 + 28.0 GB (see "Output-size cap"). Base + CFG (guidance 4.0, negative prompt) parity-locked at
 > cosine 1.000000. Resolution sweep 512²/1024²/1536² all coherent. Quant: **int8** DiT 6.4 GB
 > (cos 0.9998), **int4** DiT 3.5 GB (renders sharp). Wrapped as two `textToImage` ModelPackages,
 > validated through the real `load → run → decode` surface — the third public T2I backer alongside
@@ -126,8 +126,28 @@ tiers, against 42.9 s (int4) and 36.4 s (bf16) for v0.5.0:
 | int4 | 25,673 MiB | 23,060 MiB |
 | bf16 | 33,917 MiB | 31,304 MiB |
 
-⚠ Output size is uncapped and the declared activation was measured at 1024². Above that it
-under-declares (AB-L-0202): the decode alone is 27.7 GB at 1536² and 47.1 GB at 2048².
+### Output-size cap: area ≤ 1536² (v0.5.2, AB-T-0204)
+
+`run()` throws `ZImagePackageError.sizeOutOfEnvelope` above `ZImageT2IPackage.maxOutputPixels`
+(1536×1536, by area, so a non-square request of the same area is admitted) and below 16 px a side.
+Before v0.5.2 any size ran, and the 1024²-measured footprint under-declared every larger request: the
+decode alone is 27.7 GB at 1536² and 47.1 GB at 2048².
+
+The rows are now declared at the cap and re-measured (`zimage-cli --pkg-e2e … --width 1536`, MLX
+active/peak):
+
+| Tier | Resident (after load) | Activation 1024² | Activation 1536² | Declared |
+|---|---|---|---|---|
+| bf16 | 20.49 GB | 12.34 GB | 27.68 GB | 20.5 + 28.0 GB |
+| int8 | 14.85 GB | 12.34 GB | 27.68 GB | 15.0 + 28.0 GB |
+| int4 | 11.84 GB | 12.34 GB | 27.68 GB | 11.9 + 28.0 GB |
+
+- **Base (CFG) and Turbo measure the same** on every tier. The fp32 AE decode sets the activation,
+  and it does not depend on the quant.
+- **The int4 resident was under-declared at 6 GB.** That figure assumed an int4 text encoder, which
+  was never shipped: the encoder is bf16 on every tier.
+- **A 1024² request now over-reserves about 15 GB.** That is the price of one quant-keyed row
+  covering the whole size range.
 
 Gate: `ZIMAGE_PARITY=1 ZIMAGE_SNAPSHOT=… swift test -c release -Xswiftc -enable-testing --filter P3cVAEDecodeMemoryTests`.
 
