@@ -75,7 +75,9 @@ Published bf16 snapshots on Hugging Face (Apache-2.0), materialized automaticall
 - Base: [`mlx-community/Z-Image-bf16`](https://huggingface.co/mlx-community/Z-Image-bf16)
 
 int8/int4 are produced at load time from the bf16 snapshot (correct resident footprint;
-pre-quantized repos are a later download-size optimization). Upstream:
+pre-quantized repos are a later download-size optimization), so every quant tier downloads the bf16
+repo. Before v0.5.3 the int8/int4 tiers named `-8bit`/`-4bit` repos that were never published, and
+their first download failed with HTTP 404 (AB-T-0221). Upstream:
 [Tongyi-MAI/Z-Image-Turbo](https://huggingface.co/Tongyi-MAI/Z-Image-Turbo) ·
 [Tongyi-MAI/Z-Image](https://huggingface.co/Tongyi-MAI/Z-Image).
 

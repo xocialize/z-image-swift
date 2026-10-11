@@ -43,20 +43,38 @@ final class MaterializationTests: XCTestCase {
 
     // MARK: - Source declaration shape
 
-    func testQuantSelectsSuffixedRepo() {
-        XCTAssertEqual(ZImageConfiguration.turbo(quant: .bf16).effectiveRepo,
-                       "mlx-community/Z-Image-Turbo-bf16")
-        XCTAssertEqual(ZImageConfiguration.turbo(quant: .int8).effectiveRepo,
-                       "mlx-community/Z-Image-Turbo-8bit")
-        XCTAssertEqual(ZImageConfiguration.base(quant: .int4).effectiveRepo,
-                       "mlx-community/Z-Image-4bit")
+    /// Every quant tier downloads the one published snapshot, the bf16 repo: load() quantizes the
+    /// DiT itself. The "-8bit"/"-4bit" repos were never published (AB-T-0221: HTTP 404).
+    func testEveryQuantMaterializesTheBF16Snapshot() {
+        for quant in [Quant.bf16, .int8, .int4] {
+            XCTAssertEqual(ZImageConfiguration.turbo(quant: quant).effectiveRepo,
+                           "mlx-community/Z-Image-Turbo-bf16", "\(quant)")
+            XCTAssertEqual(ZImageConfiguration.base(quant: quant).effectiveRepo,
+                           "mlx-community/Z-Image-bf16", "\(quant)")
+        }
     }
 
     func testWeightSourcesSingleSnapshot() {
         let sources = ZImageConfiguration.turbo(quant: .int4).weightSources
         XCTAssertEqual(sources.map(\.role), ["snapshot"])
-        XCTAssertEqual(sources[0].repo, "mlx-community/Z-Image-Turbo-4bit")
+        XCTAssertEqual(sources[0].repo, "mlx-community/Z-Image-Turbo-bf16")
         XCTAssertTrue(sources[0].matching!.contains("transformer/*"))
+    }
+
+    /// A quant tier is satisfied by (and loads from) the bf16 snapshot's store directory.
+    func testQuantTierSharesTheBF16StoreDirectory() throws {
+        let root = FileManager.default.temporaryDirectory
+            .appending(path: "zimage-store-\(UUID().uuidString)")
+        defer { try? FileManager.default.removeItem(at: root) }
+        let int4 = ZImageConfiguration.turbo(quant: .int4)
+        XCTAssertEqual(int4.missingWeightSources(storeRoot: root).count, 1)
+        let dir = ModelStore(root: root).directory(for: "mlx-community/Z-Image-Turbo-bf16")!
+        for sub in ["transformer", "vae"] {
+            try FileManager.default.createDirectory(
+                at: dir.appending(path: sub), withIntermediateDirectories: true)
+        }
+        XCTAssertTrue(int4.missingWeightSources(storeRoot: root).isEmpty)
+        XCTAssertEqual(int4.resolvedSnapshotDirectory(storeRoot: root)?.path, dir.path)
     }
 
     // MARK: - Store-layout probe + explicit-path precedence

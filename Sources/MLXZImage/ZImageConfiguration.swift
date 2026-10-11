@@ -10,12 +10,11 @@ import Foundation
 import MLXToolKit
 
 public struct ZImageConfiguration: PackageConfiguration, ModelStorable, QuantConfigured {
-    /// mlx-community family base (per-quant repo derived via the quant suffix), e.g.
-    /// "mlx-community/Z-Image-Turbo" → "-bf16" / "-8bit" / "-4bit".
+    /// mlx-community family base; the published snapshot is `repo + "-bf16"` (see `effectiveRepo`).
     public var repo: String
     public var revision: String?
     /// DiT quant tier. `QuantConfigured` surfaces it so the MemoryGovernor charges the matching
-    /// split QuantFootprint (not the bf16 max). int8/int4 select the pre-quantized published repo.
+    /// split QuantFootprint (not the bf16 max). int8/int4 quantize the bf16 DiT on load.
     public var quant: Quant
     /// Explicit local snapshot root (validation / bring-your-own). nil ⇒ auto-materialize.
     public var snapshotPath: String?
@@ -83,16 +82,15 @@ public struct ZImageConfiguration: PackageConfiguration, ModelStorable, QuantCon
 // MARK: - Weight sources (auto-materialization, v0.19.0 MAT gate)
 
 extension ZImageConfiguration: WeightSourcing {
-    /// The quant-suffixed mlx-community repo the tier materializes from. Each published repo is a
-    /// complete snapshot (transformer at that quant + text_encoder + vae + tokenizer + scheduler);
-    /// only transformer/ (and the encoder, for the quant tiers) differs across tiers.
-    public var effectiveRepo: String {
-        switch quant {
-        case .int8: return repo + "-8bit"
-        case .int4: return repo + "-4bit"
-        default: return repo + "-bf16"
-        }
-    }
+    /// The mlx-community repo every tier materializes from: the bf16 snapshot (transformer +
+    /// text_encoder + vae + tokenizer + scheduler). It is the only one published — load()
+    /// quantizes the DiT to int8/int4 itself, so the quant tiers share these weights and their
+    /// store directory.
+    ///
+    /// Until 0.5.3 int8/int4 named "-8bit"/"-4bit" repos that were never published, so a quant
+    /// tier with no local snapshot failed its first download with HTTP 404 (AB-T-0221). Per-quant
+    /// repos, if they are ever published, need a hub check before they are named here.
+    public var effectiveRepo: String { repo + "-bf16" }
 
     /// One snapshot source; the globs pull the whole diffusers tree.
     public var weightSources: [WeightSource] {
