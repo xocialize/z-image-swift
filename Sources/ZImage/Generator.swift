@@ -67,6 +67,7 @@ public final class ZImageGenerator {
     ) -> (pixels: [UInt8], width: Int, height: Int) {
         let scheduler = FlowMatchEulerDiscreteScheduler(
             numTrainTimesteps: 1000, shift: schedulerShift, useDynamicShifting: schedulerDynamic)
+        ZImageProgress.report(.encode)   // the AE encode of the input image; generate() continues it
         let moments = vae.encodeMoments(image)
         let mean = moments[0..., ..<vae.latentChannels, 0..., 0...]
         let clean = (mean - vae.shiftFactor) * vae.scalingFactor

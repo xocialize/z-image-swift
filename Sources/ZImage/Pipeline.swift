@@ -47,6 +47,15 @@ public enum ZImagePipeline {
         return Int(max(n - min(n * s, n), 0))
     }
 
+    /// The number of DiT forwards the denoise loop runs: the steps from `startStep` on (img2img
+    /// skips the earlier ones), less a final step at t == 0, which the loop skips. This is the
+    /// `totalSteps` the loop reports to `ZImageProgress`.
+    public static func denoiseStepCount(timesteps: [Float], startStep: Int) -> Int {
+        timesteps.indices.filter { i in
+            i >= startStep && !(timesteps[i] == 0 && i == timesteps.count - 1)
+        }.count
+    }
+
     /// Mirrors `generate()` in the reference. `initLatents` injects the initial noise
     /// (parity path); when nil, latents are drawn from MLXRandom using `seed`.
     public static func generate(
@@ -80,6 +89,7 @@ public enum ZImagePipeline {
         let doClassifierFreeGuidance = guidanceScale > 1.0
 
         // --- text features (variable-length, reference masked-gather semantics) ---
+        ZImageProgress.report(.encode)
         let promptEmbeds = textEncoder.encode(prompt)
         var negativeEmbeds: MLXArray? = nil
         if doClassifierFreeGuidance {
@@ -121,6 +131,11 @@ public enum ZImagePipeline {
         }
 
         let timesteps = scheduler.timesteps
+        // Progress counts the forwards that actually run (img2img skips the pre-start steps), so
+        // a host sees 1/N … N/N rather than a counter that starts part-way or stops short.
+        let denoiseSteps = denoiseStepCount(timesteps: timesteps, startStep: startStep)
+        var stepsDone = 0
+        ZImageProgress.report(.denoise)
         for (i, t) in timesteps.enumerated() {
             // Cooperative cancellation: bail per denoise step (non-throwing core API — the
             // MLXZImage wrapper's post-call `try Task.checkCancellation()` rethrows).
@@ -171,6 +186,8 @@ public enum ZImagePipeline {
             ).prevSample
             eval(latents)                    // step boundary: bound the lazy graph
             MLX.Memory.clearCache()          // long-denoise cache discipline (skill rule)
+            stepsDone += 1
+            ZImageProgress.report(.denoise, step: stepsDone, totalSteps: denoiseSteps)
             onStep?(i + 1, timesteps.count)
         }
 
@@ -180,6 +197,7 @@ public enum ZImagePipeline {
             return GenerateResult(latents: latents, image: nil)
         }
 
+        ZImageProgress.report(.decode)
         let z = latents.asType(.float32) / vae.scalingFactor + vae.shiftFactor
         let image = vae.decode(z)
         eval(image)

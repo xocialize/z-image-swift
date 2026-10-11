@@ -67,6 +67,31 @@ let out = try await package.run(IEditRequest(
     as! IEditResponse
 ```
 
+## Run-phase progress (v0.5.4, AB-A-0139)
+
+The packages report into the engine's `RunProgress` plane (contract 1.18.0), so a host shows
+`denoise 5/8` instead of an unexplained "running". The phases, in order:
+
+| phase | covers | steps? |
+|---|---|---|
+| `encode` | Qwen3-4B conditioning (plus the negative pass under CFG on base), and the AE encode of the input image on img2img | no |
+| `denoise` | the flow-matching Euler loop: once at loop entry with no step, then after each completed step. `N` counts the forwards that run, so img2img at strength 0.75 over 8 steps reports 1/6 … 6/6 | **yes** — `step i/N`, 1-based |
+| `decode` | FLUX.1 AE decode — one eval, so no per-chunk counts | no |
+| `postprocess` | PNG encode (reported by the wrapper, after the model is done) | no |
+
+Measured with `zimage-cli --pkg-e2e turbo --width 768` (bf16, Apple M5 Max), which binds a
+print sink around `run()` the way the engine does:
+
+```
+encode 1.17 s → denoise 1/8 at +3.50 s (first step carries the warm-up) … 8/8 at +8.23 s
+(≈0.66 s/step) → decode 2.77 s → postprocess 0.07 s        (11.07 s run)
+```
+
+The core stays engine-free: `ZImage` reports into its own `ZImageProgress` task-local sink, and
+`MLXZImage` forwards those events into `RunProgress` (`ZImageProgressBridge`). Nothing bound ⇒ no-op, so the
+CLI and the parity gates run unchanged. A host binds a sink around `engine.run` (contract 1.51.0)
+or reads `engine.runProgress`.
+
 ## Weights
 
 Published bf16 snapshots on Hugging Face (Apache-2.0), materialized automatically by the engine

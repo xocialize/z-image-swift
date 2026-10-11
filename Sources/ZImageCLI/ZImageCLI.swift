@@ -92,8 +92,15 @@ struct ZImageCLI {
             let t1 = Date()
             let width = opt("--width").flatMap { Int($0) } ?? 1024
             let height = opt("--height").flatMap { Int($0) } ?? width
-            let resp = try await pkg.run(T2IRequest(
-                prompt: prompt, width: width, height: height, seed: 42)) as! T2IResponse
+            // Bind a RunProgress sink the way the engine does, so the run's phase reports print.
+            let resp = try await RunProgress.$sink.withValue({ r in
+                let at = String(format: "%.2f", Date().timeIntervalSince(t1))
+                let counts = r.step.map { " \($0)/\(r.totalSteps ?? 0)" } ?? ""
+                print("[pkg-e2e] +\(at)s progress \(r.phase.rawValue)\(counts)")
+            }) {
+                try await pkg.run(T2IRequest(
+                    prompt: prompt, width: width, height: height, seed: 42)) as! T2IResponse
+            }
             print("[pkg-e2e] run: \(String(format: "%.2f", Date().timeIntervalSince(t1)))s "
                   + "→ \(resp.image.width)x\(resp.image.height) \(resp.image.data.count) bytes "
                   + "(.\(resp.image.format))")

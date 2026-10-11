@@ -35,6 +35,20 @@ public enum ZImagePackageError: Error, LocalizedError {
     }
 }
 
+/// Forwards the core's ambient phase events into the engine's `RunProgress` plane (contract
+/// 1.18.0, ENGINE-NEEDS V2; AB-A-0139). The engine binds `RunProgress.sink` as a task-local
+/// around `run()`; the core reports into its own engine-free `ZImageProgress` sink, and this
+/// closure joins the two. The core's phase names ARE the canonical `RunPhase` constants, so raw
+/// values forward with no mapping table.
+///
+/// Namespaced rather than inlined so the offline suite can exercise the mapping without weights.
+enum ZImageProgressBridge {
+    static let forward: ZImageProgress.Sink = { e in
+        RunProgress.report(RunPhase(rawValue: e.phase.rawValue),
+                           step: e.step, totalSteps: e.totalSteps)
+    }
+}
+
 @InferenceActor
 public final class ZImageT2IPackage: ModelPackage {
     public typealias Configuration = ZImageConfiguration
@@ -150,6 +164,8 @@ public final class ZImageT2IPackage: ModelPackage {
         // (`Task.isCancelled` break in ZImagePipeline.generate), a cancelled task skips the
         // VAE decode, and the post-generate checkpoints below rethrow CancellationError
         // unchanged (never wrapped in ZImagePackageError).
+        // Progress: the core reports encode → denoise (per step) → decode into ZImageProgress,
+        // bound below for exactly this generation; the PNG encode is reported as postprocess.
         try Task.checkCancellation()
         guard let generator else { throw PackageError.notLoaded }
         let prof = MLXProfiler.shared
@@ -159,11 +175,14 @@ public final class ZImageT2IPackage: ModelPackage {
             let steps = t2i.steps ?? configuration.defaultSteps
             let guidance = Float(t2i.guidanceScale ?? configuration.defaultGuidanceScale)
             prof.beginRun("z-image textToImage steps=\(steps) \(width)x\(height)")
-            let (pixels, w, h) = generator.generate(
-                prompt: t2i.prompt, negativePrompt: t2i.negativePrompt,
-                width: width, height: height, steps: steps, guidanceScale: guidance, seed: t2i.seed ?? 0)
+            let (pixels, w, h) = ZImageProgress.$sink.withValue(ZImageProgressBridge.forward) {
+                generator.generate(
+                    prompt: t2i.prompt, negativePrompt: t2i.negativePrompt,
+                    width: width, height: height, steps: steps, guidanceScale: guidance, seed: t2i.seed ?? 0)
+            }
             prof.endRun(denominators: ["step": Double(steps)])
             try Task.checkCancellation()
+            RunProgress.report(.postprocess)
             return T2IResponse(image: Image(format: .png, data: try Self.encodePNG(pixels: pixels, width: w, height: h), width: w, height: h))
         }
 
@@ -180,12 +199,15 @@ public final class ZImageT2IPackage: ModelPackage {
             else if case .int(let n)? = edit.metaData["strength"] { strength = Float(n) }
             let image = try Self.decodeInputImage(first, width: width, height: height)
             prof.beginRun("z-image img2img strength=\(strength) steps=\(steps) \(width)x\(height)")
-            let (pixels, w, h) = generator.generateImg2Img(
-                prompt: edit.prompt, negativePrompt: edit.negativePrompt, image: image,
-                width: width, height: height, steps: steps, guidanceScale: guidance,
-                strength: strength, seed: edit.seed ?? 0)
+            let (pixels, w, h) = ZImageProgress.$sink.withValue(ZImageProgressBridge.forward) {
+                generator.generateImg2Img(
+                    prompt: edit.prompt, negativePrompt: edit.negativePrompt, image: image,
+                    width: width, height: height, steps: steps, guidanceScale: guidance,
+                    strength: strength, seed: edit.seed ?? 0)
+            }
             prof.endRun(denominators: ["step": Double(steps)])
             try Task.checkCancellation()
+            RunProgress.report(.postprocess)
             return IEditResponse(image: Image(format: .png, data: try Self.encodePNG(pixels: pixels, width: w, height: h), width: w, height: h))
         }
 
