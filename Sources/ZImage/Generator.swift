@@ -13,6 +13,10 @@ public final class ZImageGenerator {
     public let schedulerShift: Float
     public let schedulerDynamic: Bool
     public let transformerDtype: DType
+    /// Static shift per step count, for checkpoints distilled at a fixed set of step counts
+    /// with a different shift each (NitroFusion2: 1→3, 2→6, 3→8, 4→9). A step count with no
+    /// entry uses `schedulerShift`. Empty for Base and Turbo.
+    public let stepShifts: [Int: Float]
 
     public init(
         transformer: ZImageTransformer2DModel,
@@ -20,7 +24,8 @@ public final class ZImageGenerator {
         textEncoder: ZImageTextEncoder,
         schedulerShift: Float,
         schedulerDynamic: Bool,
-        transformerDtype: DType
+        transformerDtype: DType,
+        stepShifts: [Int: Float] = [:]
     ) {
         self.transformer = transformer
         self.vae = vae
@@ -28,7 +33,11 @@ public final class ZImageGenerator {
         self.schedulerShift = schedulerShift
         self.schedulerDynamic = schedulerDynamic
         self.transformerDtype = transformerDtype
+        self.stepShifts = stepShifts
     }
+
+    /// The static shift a run of `steps` steps uses.
+    public func shift(forSteps steps: Int) -> Float { stepShifts[steps] ?? schedulerShift }
 
     /// Returns interleaved RGB8 pixels + dimensions.
     public func generate(
@@ -42,7 +51,7 @@ public final class ZImageGenerator {
         onStep: ((Int, Int) -> Void)? = nil
     ) -> (pixels: [UInt8], width: Int, height: Int) {
         let scheduler = FlowMatchEulerDiscreteScheduler(
-            numTrainTimesteps: 1000, shift: schedulerShift, useDynamicShifting: schedulerDynamic)
+            numTrainTimesteps: 1000, shift: shift(forSteps: steps), useDynamicShifting: schedulerDynamic)
 
         let result = ZImagePipeline.generate(
             transformer: transformer, vae: vae, textEncoder: textEncoder, scheduler: scheduler,
@@ -66,7 +75,7 @@ public final class ZImageGenerator {
         onStep: ((Int, Int) -> Void)? = nil
     ) -> (pixels: [UInt8], width: Int, height: Int) {
         let scheduler = FlowMatchEulerDiscreteScheduler(
-            numTrainTimesteps: 1000, shift: schedulerShift, useDynamicShifting: schedulerDynamic)
+            numTrainTimesteps: 1000, shift: shift(forSteps: steps), useDynamicShifting: schedulerDynamic)
         ZImageProgress.report(.encode)   // the AE encode of the input image; generate() continues it
         let moments = vae.encodeMoments(image)
         let mean = moments[0..., ..<vae.latentChannels, 0..., 0...]

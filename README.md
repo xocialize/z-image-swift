@@ -10,7 +10,8 @@ Two products:
   FlowMatchEuler scheduler + pipeline).
 - **`MLXZImage`** — the conformant MLXEngine wrappers: `ZImageT2IPackage` (Base, ~28-step CFG,
   surface `z-image-t2i`) and `ZImageTurboT2IPackage` (Turbo, distilled 8-step no-CFG, surface
-  `z-image-turbo-t2i`), both `textToImage`, selected by `PackageID`.
+  `z-image-turbo-t2i`), both `textToImage`, selected by `PackageID`. `ZImageNitroFusion2T2IPackage`
+  (1–4 step, surface `z-image-nitrofusion2-t2i`) is described below.
 
 > **Status: complete · wrapped · GPU-validated.** Parity vs the PyTorch goldens (fp32/CPU stream):
 > DiT cosine **≥0.9999999** (both aligned + padded cases) · VAE decode **118 dB** · encoder token
@@ -91,6 +92,50 @@ The core stays engine-free: `ZImage` reports into its own `ZImageProgress` task-
 `MLXZImage` forwards those events into `RunProgress` (`ZImageProgressBridge`). Nothing bound ⇒ no-op, so the
 CLI and the parity gates run unchanged. A host binds a sink around `engine.run` (contract 1.51.0)
 or reads `engine.runProgress`.
+
+## NitroFusion2 tier (1–4 steps, v0.6.0)
+
+`ZImageNitroFusion2T2IPackage` (surface `z-image-nitrofusion2-t2i`) runs
+[ChenDY/NitroFusion2](https://huggingface.co/ChenDY/NitroFusion2) (Apache-2.0; Chen & Song,
+arXiv 2611.05648), an adversarial distillation of Z-Image-Turbo to 1–4 steps at guidance 0.
+Its `transformer/config.json` is identical to Turbo's, so only the DiT weights change.
+
+```swift
+let package = ZImageNitroFusion2T2IPackage(configuration: .nitroFusion2(quant: .int4))
+try await package.load()
+let response = try await package.run(T2IRequest(
+    prompt: "a lighthouse on a stormy coast at dusk", width: 1024, height: 1024,
+    seed: 42)) as! T2IResponse          // one step by default; steps: 1...4
+```
+
+- **Weights:** the transformer is materialized from `ChenDY/NitroFusion2` (`transformer/*`,
+  12.3 GB, already bf16) and the text encoder, VAE, tokenizer and scheduler from
+  `mlx-community/Z-Image-Turbo-bf16`, without Turbo's own transformer. Nothing was republished.
+  `snapshotPath` overrides the Turbo snapshot, `transformerPath` the NitroFusion2 directory.
+- **Steps and shift:** only 1, 2, 3 or 4 steps are accepted (`unsupportedSteps` otherwise).
+  The static shift follows the step count, as in upstream `inference.py`: 3.0 / 6.0 / 8.0 / 9.0.
+- **Text-to-image only.** The strength-based img2img surface is not offered at these step counts.
+- **Not ported: the de-distillation LoRA.** Upstream recommends `nf2-dedistill-lora.safetensors`
+  for 2+ steps at per-step scales. This package has no LoRA support, so steps 2–4 run as
+  upstream's `--no-dedistill-lora`. One step uses no LoRA upstream either.
+- **No upstream parity run.** The DiT, scheduler and pipeline are the Turbo code that is
+  parity-locked above; the schedule is unit-tested against upstream's sigmas
+  (`StepShiftScheduleTests`). No PyTorch NitroFusion2 golden was generated.
+
+Measured 2026-11-09 through `zimage-cli --pkg-e2e` (M5 Max 128 GB, Release, 1024², seed 42,
+warm runs, four prompts; AB-T-0469):
+
+| Tier | Steps | Run, bf16 | Run, int4 | Resident bf16 / int4 | MLX peak bf16 / int4 |
+|---|---|---|---|---|---|
+| Turbo | 8 | 11.1–11.3 s | 11.5–11.9 s | 19,539 / 11,295 MiB | 31,304 / 23,060 MiB |
+| NitroFusion2 | 1 | 2.25–2.27 s | 2.31–2.34 s | 19,539 / 11,295 MiB | 31,304 / 23,060 MiB |
+| NitroFusion2 | 2 | 3.50–3.54 s | 3.65–3.66 s | 19,539 / 11,295 MiB | 31,304 / 23,060 MiB |
+
+Resident and peak equal Turbo's, so the tier declares Turbo's footprints. By eye, one-step
+scenes and portraits are coherent and detailed at bf16 and int4. Rendered text is less reliable
+than Turbo's 8-step: "hello world" on a sign came out right on one seed of three at one step
+(misspelled or duplicated on the others, and at two steps on seed 42), and int4 degrades small
+text further. Renders: `mlxengine-image/WIP/nitrofusion2-eval/`.
 
 ## Weights
 

@@ -23,6 +23,8 @@ public enum ZImagePackageError: Error, LocalizedError {
     /// Output size outside the measured envelope: area above `ZImageT2IPackage.maxOutputPixels`
     /// (1536²), or a side under 16 px.
     case sizeOutOfEnvelope(width: Int, height: Int)
+    /// A step count the tier was not distilled for (`ZImageConfiguration.stepShifts`).
+    case unsupportedSteps(Int, supported: [Int])
 
     public var errorDescription: String? {
         switch self {
@@ -31,6 +33,9 @@ public enum ZImagePackageError: Error, LocalizedError {
         case .sizeOutOfEnvelope(let w, let h):
             return "Z-Image output \(w)×\(h) is outside the supported envelope "
                 + "(each side ≥ 16 px, area ≤ 1536×1536)."
+        case .unsupportedSteps(let n, let supported):
+            return "This Z-Image tier runs at \(supported.map(String.init).joined(separator: ", ")) "
+                + "steps; \(n) was requested."
         }
     }
 }
@@ -119,19 +124,29 @@ public final class ZImageT2IPackage: ModelPackage {
         // (contract 1.24.0): resident()/prepare() downloads missing WeightSourcing
         // sources before load() runs. The guard below stays as the offline backstop —
         // absent weights with no store root still fail legibly here.
+        // The transformer normally sits inside the snapshot; a tier with a `transformerRepo`
+        // (NitroFusion2) reads it from that repo's directory and the rest from the snapshot.
+        let fm = FileManager.default
         guard let snapshot = configuration.resolvedSnapshotDirectory(
             storeRoot: configuration.modelsRootDirectory),
-            FileManager.default.fileExists(
-                atPath: snapshot.appendingPathComponent("transformer").path)
+            fm.fileExists(atPath: snapshot.appendingPathComponent("vae").path)
         else {
             throw ZImagePackageError.unreadableSnapshot(
                 configuration.snapshotPath ?? configuration.effectiveRepo)
+        }
+        guard let transformerRoot = configuration.resolvedTransformerDirectory(
+            storeRoot: configuration.modelsRootDirectory),
+            fm.fileExists(atPath: transformerRoot.appendingPathComponent("transformer").path)
+        else {
+            throw ZImagePackageError.unreadableSnapshot(
+                configuration.transformerPath ?? configuration.transformerRepo
+                    ?? configuration.snapshotPath ?? configuration.effectiveRepo)
         }
 
         // DiT: load bf16, quantize on load for int8/int4. (Pre-quantized published repos —
         // smaller download — are a later optimization; resident footprint is identical.)
         let transformer = try ZImageWeights.loadTransformer(
-            snapshotPath: snapshot.path, dtype: .bfloat16)
+            snapshotPath: transformerRoot.path, dtype: .bfloat16)
         switch configuration.quant {
         case .int8: ZImageWeights.quantizeDiT(transformer, bits: 8)
         case .int4: ZImageWeights.quantizeDiT(transformer, bits: 4)
@@ -150,7 +165,8 @@ public final class ZImageT2IPackage: ModelPackage {
 
         generator = ZImageGenerator(
             transformer: transformer, vae: vae, textEncoder: textEncoder,
-            schedulerShift: shift, schedulerDynamic: dynamic, transformerDtype: .bfloat16)
+            schedulerShift: shift, schedulerDynamic: dynamic, transformerDtype: .bfloat16,
+            stepShifts: configuration.stepShifts.mapValues { Float($0) })
     }
 
     public func unload() async {
@@ -172,7 +188,7 @@ public final class ZImageT2IPackage: ModelPackage {
 
         if let t2i = request as? T2IRequest {
             let (width, height) = try Self.outputSize(t2i.width, t2i.height)
-            let steps = t2i.steps ?? configuration.defaultSteps
+            let steps = try Self.checkedSteps(t2i.steps, configuration)
             let guidance = Float(t2i.guidanceScale ?? configuration.defaultGuidanceScale)
             prof.beginRun("z-image textToImage steps=\(steps) \(width)x\(height)")
             let (pixels, w, h) = ZImageProgress.$sink.withValue(ZImageProgressBridge.forward) {
@@ -188,7 +204,7 @@ public final class ZImageT2IPackage: ModelPackage {
 
         if let edit = request as? IEditRequest, let first = edit.images.first {
             let (width, height) = try Self.outputSize(edit.width, edit.height)
-            let steps = edit.steps ?? configuration.defaultSteps
+            let steps = try Self.checkedSteps(edit.steps, configuration)
             let guidance = Float(edit.guidanceScale ?? configuration.defaultGuidanceScale)
             // Default strength 0.75 — a more useful midpoint than diffusers' 0.6: on the distilled
             // Turbo, 0.6 barely moves global/time-of-day edits (the preserved low-freq wins), while
@@ -212,6 +228,17 @@ public final class ZImageT2IPackage: ModelPackage {
         }
 
         throw PackageError.unsupportedCapability(request.capability)
+    }
+
+    /// The request's step count, or the tier default — checked against the step counts the tier
+    /// was distilled for, when it declares them.
+    nonisolated static func checkedSteps(_ requested: Int?, _ configuration: Configuration) throws -> Int {
+        let steps = requested ?? configuration.defaultSteps
+        guard configuration.stepShifts.isEmpty || configuration.stepShifts[steps] != nil else {
+            throw ZImagePackageError.unsupportedSteps(
+                steps, supported: configuration.stepShifts.keys.sorted())
+        }
+        return steps
     }
 
     /// Largest output area the declared footprints cover: 1536², the largest validated render and

@@ -64,20 +64,33 @@ struct ZImageCLI {
 
         // P8 wrapper e2e: drive the real ModelPackage surface (load → run → decode) end to
         // end, proving the engine glue (config resolution, dtype/quant selection, T2IRequest
-        // plumbing, PNG encode), not just the raw pipeline. --pkg-e2e [turbo|base]
-        // [--quant 4|8] [--width W [--height H]] (default 1024²).
+        // plumbing, PNG encode), not just the raw pipeline. --pkg-e2e [turbo|base|nf2]
+        // [--quant 4|8] [--width W [--height H]] (default 1024²) [--steps N] [--seed S]
+        // [--transformer <dir>] (nf2).
         if let tier = opt("--pkg-e2e") {
             let snapshot = opt("--snapshot") ?? (tier == "base"
                 ? defaultSnapshot.replacingOccurrences(of: "Z-Image-Turbo", with: "Z-Image")
                 : defaultSnapshot)
             let quant = opt("--quant").flatMap { Int($0) }
             let q: Quant = quant == 4 ? .int4 : (quant == 8 ? .int8 : .bf16)
-            let cfg = tier == "base"
-                ? ZImageConfiguration.base(quant: q, snapshotPath: snapshot)
-                : ZImageConfiguration.turbo(quant: q, snapshotPath: snapshot)
-            let pkg: any ModelPackage = tier == "base"
-                ? ZImageT2IPackage(configuration: cfg)
-                : ZImageTurboT2IPackage(configuration: cfg)
+            // nf2: --snapshot is the Z-Image-Turbo snapshot, --transformer the directory
+            // holding NitroFusion2's transformer/.
+            let transformerPath = opt("--transformer")
+            let cfg: ZImageConfiguration
+            let pkg: any ModelPackage
+            switch tier {
+            case "base":
+                cfg = .base(quant: q, snapshotPath: snapshot)
+                pkg = ZImageT2IPackage(configuration: cfg)
+            case "nf2":
+                cfg = .nitroFusion2(quant: q, snapshotPath: snapshot, transformerPath: transformerPath)
+                pkg = ZImageNitroFusion2T2IPackage(configuration: cfg)
+            default:
+                cfg = .turbo(quant: q, snapshotPath: snapshot)
+                pkg = ZImageTurboT2IPackage(configuration: cfg)
+            }
+            let steps = opt("--steps").flatMap { Int($0) }   // nil = the tier default
+            let seed = opt("--seed").flatMap { UInt64($0) } ?? 42
             print("[pkg-e2e] tier=\(tier) quant=\(q) surface="
                   + "\(type(of: pkg).manifest.surfaces[0].name)")
             let t0 = Date()
@@ -99,7 +112,8 @@ struct ZImageCLI {
                 print("[pkg-e2e] +\(at)s progress \(r.phase.rawValue)\(counts)")
             }) {
                 try await pkg.run(T2IRequest(
-                    prompt: prompt, width: width, height: height, seed: 42)) as! T2IResponse
+                    prompt: prompt, width: width, height: height, steps: steps,
+                    seed: seed)) as! T2IResponse
             }
             print("[pkg-e2e] run: \(String(format: "%.2f", Date().timeIntervalSince(t1)))s "
                   + "→ \(resp.image.width)x\(resp.image.height) \(resp.image.data.count) bytes "
