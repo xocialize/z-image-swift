@@ -17,6 +17,10 @@ public final class ZImageGenerator {
     /// with a different shift each (NitroFusion2: 1→3, 2→6, 3→8, 4→9). A step count with no
     /// entry uses `schedulerShift`. Empty for Base and Turbo.
     public let stepShifts: [Int: Float]
+    /// A per-step LoRA installed on `transformer` and its strength for each step of an N-step
+    /// run (`stepLoRAScales[N][i]`). A step with no entry runs at strength 0 — the plain model.
+    public let stepLoRA: ZImageStepLoRAScale?
+    public let stepLoRAScales: [Int: [Float]]
 
     public init(
         transformer: ZImageTransformer2DModel,
@@ -25,7 +29,9 @@ public final class ZImageGenerator {
         schedulerShift: Float,
         schedulerDynamic: Bool,
         transformerDtype: DType,
-        stepShifts: [Int: Float] = [:]
+        stepShifts: [Int: Float] = [:],
+        stepLoRA: ZImageStepLoRAScale? = nil,
+        stepLoRAScales: [Int: [Float]] = [:]
     ) {
         self.transformer = transformer
         self.vae = vae
@@ -34,6 +40,14 @@ public final class ZImageGenerator {
         self.schedulerDynamic = schedulerDynamic
         self.transformerDtype = transformerDtype
         self.stepShifts = stepShifts
+        self.stepLoRA = stepLoRA
+        self.stepLoRAScales = stepLoRAScales
+    }
+
+    /// The LoRA strength for forward `index` of a `steps`-step run (0 when there is none).
+    public func loraScale(forSteps steps: Int, index: Int) -> Float {
+        guard let row = stepLoRAScales[steps], row.indices.contains(index) else { return 0 }
+        return row[index]
     }
 
     /// The static shift a run of `steps` steps uses.
@@ -53,12 +67,18 @@ public final class ZImageGenerator {
         let scheduler = FlowMatchEulerDiscreteScheduler(
             numTrainTimesteps: 1000, shift: shift(forSteps: steps), useDynamicShifting: schedulerDynamic)
 
+        // The per-step LoRA strength is set before each forward and always returned to 0, so a
+        // cancelled run, or a later img2img run, never inherits a strength.
+        defer { stepLoRA?.value = 0 }
         let result = ZImagePipeline.generate(
             transformer: transformer, vae: vae, textEncoder: textEncoder, scheduler: scheduler,
             prompt: prompt, height: height, width: width,
             numInferenceSteps: steps, guidanceScale: guidanceScale,
             negativePrompt: negativePrompt,
             seed: seed, transformerDtype: transformerDtype,
+            willStep: stepLoRA.map { lora in
+                { index in lora.value = self.loraScale(forSteps: steps, index: index) }
+            },
             onStep: onStep)
 
         // image is nil only when the run's task was cancelled (decode skipped); the engine

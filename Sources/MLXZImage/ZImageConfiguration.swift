@@ -34,6 +34,11 @@ public struct ZImageConfiguration: PackageConfiguration, ModelStorable, QuantCon
     /// tier accepts (run() throws `unsupportedSteps` otherwise). Empty ⇒ any step count, at the
     /// snapshot's own shift.
     public var stepShifts: [Int: Double]
+    /// A per-step LoRA file at the root of the `transformerRepo` directory, and its strength
+    /// for each step of an N-step run (`stepLoRAScales[N][i]`; a missing entry is 0). nil ⇒ no
+    /// LoRA is loaded.
+    public var stepLoRAFile: String?
+    public var stepLoRAScales: [Int: [Double]]
 
     public init(
         repo: String = "mlx-community/Z-Image-Turbo",
@@ -45,7 +50,9 @@ public struct ZImageConfiguration: PackageConfiguration, ModelStorable, QuantCon
         modelsRootDirectory: URL? = nil,
         transformerRepo: String? = nil,
         transformerPath: String? = nil,
-        stepShifts: [Int: Double] = [:]
+        stepShifts: [Int: Double] = [:],
+        stepLoRAFile: String? = nil,
+        stepLoRAScales: [Int: [Double]] = [:]
     ) {
         self.repo = repo
         self.revision = revision
@@ -57,12 +64,15 @@ public struct ZImageConfiguration: PackageConfiguration, ModelStorable, QuantCon
         self.transformerRepo = transformerRepo
         self.transformerPath = transformerPath
         self.stepShifts = stepShifts
+        self.stepLoRAFile = stepLoRAFile
+        self.stepLoRAScales = stepLoRAScales
     }
 
     // Environment-specific fields (snapshotPath, transformerPath, modelsRootDirectory) are
     // excluded from Codable.
     private enum CodingKeys: String, CodingKey {
-        case repo, revision, quant, defaultSteps, defaultGuidanceScale, transformerRepo, stepShifts
+        case repo, revision, quant, defaultSteps, defaultGuidanceScale, transformerRepo, stepShifts,
+             stepLoRAFile, stepLoRAScales
     }
 
     public init(from decoder: Decoder) throws {
@@ -74,6 +84,8 @@ public struct ZImageConfiguration: PackageConfiguration, ModelStorable, QuantCon
         defaultGuidanceScale = try c.decodeIfPresent(Double.self, forKey: .defaultGuidanceScale) ?? 0.0
         transformerRepo = try c.decodeIfPresent(String.self, forKey: .transformerRepo)
         stepShifts = try c.decodeIfPresent([Int: Double].self, forKey: .stepShifts) ?? [:]
+        stepLoRAFile = try c.decodeIfPresent(String.self, forKey: .stepLoRAFile)
+        stepLoRAScales = try c.decodeIfPresent([Int: [Double]].self, forKey: .stepLoRAScales) ?? [:]
     }
 
     /// Base tier (non-distilled, ~28-step CFG). Provenance = the Z-Image family repo.
@@ -101,23 +113,34 @@ public struct ZImageConfiguration: PackageConfiguration, ModelStorable, QuantCon
     /// NitroFusion2 shifts per step count, from the upstream `inference.py` (`SHIFT`).
     public static let nitroFusion2StepShifts: [Int: Double] = [1: 3.0, 2: 6.0, 3: 8.0, 4: 9.0]
 
+    /// NitroFusion2's de-distillation LoRA and its per-step strengths, from the upstream
+    /// `inference.py` (`DEDISTILL_LORA`, `LORA_SCALES`): on for the early steps of a 2–4 step
+    /// run, off for the last step, unused at one step.
+    public static let nitroFusion2LoRAFile = "nf2-dedistill-lora.safetensors"
+    public static let nitroFusion2LoRAScales: [Int: [Double]] = [
+        1: [0.0], 2: [0.5, 0.0], 3: [0.5, 0.6, 0.0], 4: [0.5, 0.6, 0.7, 0.0],
+    ]
+
     /// NitroFusion2 tier (ChenDY/NitroFusion2, Apache-2.0): a 1–4 step adversarial distillation
     /// of Z-Image-Turbo, no CFG. Only the DiT differs, so the transformer comes from the
     /// upstream repo (already bf16) and everything else from the Z-Image-Turbo snapshot.
     /// `snapshotPath` overrides the Turbo snapshot, `transformerPath` the directory holding
-    /// NitroFusion2's `transformer/`.
+    /// NitroFusion2's `transformer/` (and the LoRA file). `dedistillLoRA: false` skips the
+    /// LoRA — upstream's `--no-dedistill-lora`; it only changes 2–4 step runs.
     public static func nitroFusion2(
         repo: String = "mlx-community/Z-Image-Turbo",
         transformerRepo: String = "ChenDY/NitroFusion2", quant: Quant = .bf16,
         snapshotPath: String? = nil, transformerPath: String? = nil,
-        modelsRootDirectory: URL? = nil
+        modelsRootDirectory: URL? = nil, dedistillLoRA: Bool = true
     ) -> ZImageConfiguration {
         ZImageConfiguration(
             repo: repo, quant: quant, snapshotPath: snapshotPath,
             defaultSteps: 1, defaultGuidanceScale: 0.0,
             modelsRootDirectory: modelsRootDirectory,
             transformerRepo: transformerRepo, transformerPath: transformerPath,
-            stepShifts: nitroFusion2StepShifts)
+            stepShifts: nitroFusion2StepShifts,
+            stepLoRAFile: dedistillLoRA ? nitroFusion2LoRAFile : nil,
+            stepLoRAScales: dedistillLoRA ? nitroFusion2LoRAScales : [:])
     }
 }
 
@@ -147,7 +170,8 @@ extension ZImageConfiguration: WeightSourcing {
         return [
             WeightSource(role: "snapshot", repo: effectiveRepo, revision: revision,
                          matching: companions),
-            WeightSource(role: "transformer", repo: transformerRepo, matching: ["transformer/*"]),
+            WeightSource(role: "transformer", repo: transformerRepo,
+                         matching: ["transformer/*"] + (stepLoRAFile.map { [$0] } ?? [])),
         ]
     }
 
@@ -166,9 +190,10 @@ extension ZImageConfiguration: WeightSourcing {
         }
         // Split sources: each is satisfied on its own.
         return weightSources.filter { source in
-            source.role == "transformer"
-                ? !has(resolvedTransformerDirectory(storeRoot: storeRoot), "transformer")
-                : !has(snapshot, "vae")
+            guard source.role == "transformer" else { return !has(snapshot, "vae") }
+            // A directory materialized before the LoRA was part of the tier lacks the file.
+            let dir = resolvedTransformerDirectory(storeRoot: storeRoot)
+            return !has(dir, "transformer") || (stepLoRAFile.map { !has(dir, $0) } ?? false)
         }
     }
 
@@ -184,5 +209,12 @@ extension ZImageConfiguration: WeightSourcing {
         guard let transformerRepo else { return resolvedSnapshotDirectory(storeRoot: storeRoot) }
         if let transformerPath { return URL(fileURLWithPath: transformerPath) }
         return ModelStore(root: storeRoot).directory(for: transformerRepo)
+    }
+
+    /// The per-step LoRA file load() reads, when the tier has one.
+    public func resolvedStepLoRAFile(storeRoot: URL?) -> URL? {
+        guard let stepLoRAFile else { return nil }
+        return resolvedTransformerDirectory(storeRoot: storeRoot)?
+            .appendingPathComponent(stepLoRAFile)
     }
 }

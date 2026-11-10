@@ -32,7 +32,10 @@ final class NitroFusion2Tests: XCTestCase {
                        "the Turbo DiT (12 GB) must not be downloaded for NitroFusion2")
         XCTAssertTrue(sources[0].matching!.contains("vae/*"))
         XCTAssertEqual(sources[1].repo, "ChenDY/NitroFusion2")
-        XCTAssertEqual(sources[1].matching, ["transformer/*"])
+        XCTAssertEqual(sources[1].matching, ["transformer/*", "nf2-dedistill-lora.safetensors"])
+        // Without the LoRA the file is not fetched.
+        XCTAssertEqual(ZImageConfiguration.nitroFusion2(dedistillLoRA: false).weightSources[1].matching,
+                       ["transformer/*"])
     }
 
     func testEachSourceIsSatisfiedOnItsOwn() throws {
@@ -50,7 +53,14 @@ final class NitroFusion2Tests: XCTestCase {
         let nf2 = store.directory(for: "ChenDY/NitroFusion2")!
         try FileManager.default.createDirectory(
             at: nf2.appending(path: "transformer"), withIntermediateDirectories: true)
+        // transformer/ alone is what a v0.6.0 materialization left: the LoRA is still missing.
+        XCTAssertEqual(cfg.missingWeightSources(storeRoot: root).map(\.role), ["transformer"])
+        XCTAssertTrue(ZImageConfiguration.nitroFusion2(dedistillLoRA: false)
+            .missingWeightSources(storeRoot: root).isEmpty)
+        try Data().write(to: nf2.appending(path: "nf2-dedistill-lora.safetensors"))
         XCTAssertTrue(cfg.missingWeightSources(storeRoot: root).isEmpty)
+        XCTAssertEqual(cfg.resolvedStepLoRAFile(storeRoot: root)?.path,
+                       nf2.appending(path: "nf2-dedistill-lora.safetensors").path)
         XCTAssertEqual(cfg.resolvedSnapshotDirectory(storeRoot: root)?.path, turbo.path)
         XCTAssertEqual(cfg.resolvedTransformerDirectory(storeRoot: root)?.path, nf2.path)
     }
@@ -68,6 +78,7 @@ final class NitroFusion2Tests: XCTestCase {
     func testExplicitPathsWin() throws {
         let snapshot = try tempDir(["vae"])
         let transformer = try tempDir(["transformer"])
+        try Data().write(to: transformer.appending(path: "nf2-dedistill-lora.safetensors"))
         let cfg = ZImageConfiguration.nitroFusion2(
             snapshotPath: snapshot.path, transformerPath: transformer.path)
         XCTAssertTrue(cfg.missingWeightSources(storeRoot: nil).isEmpty)
@@ -77,6 +88,7 @@ final class NitroFusion2Tests: XCTestCase {
     func testMATGatePasses() throws {
         let snapshot = try tempDir(["vae"])
         let transformer = try tempDir(["transformer"])
+        try Data().write(to: transformer.appending(path: "nf2-dedistill-lora.safetensors"))
         let report = MaterializationConformance.check(
             freshConfiguration: ZImageConfiguration.nitroFusion2(),
             satisfiedConfiguration: ZImageConfiguration.nitroFusion2(
@@ -116,6 +128,23 @@ final class NitroFusion2Tests: XCTestCase {
         XCTAssertEqual(try ZImageT2IPackage.checkedSteps(nil, .base()), 28)
     }
 
+    func testLoRAScalesMatchUpstream() {
+        let cfg = ZImageConfiguration.nitroFusion2()
+        XCTAssertEqual(cfg.stepLoRAFile, "nf2-dedistill-lora.safetensors")
+        XCTAssertEqual(cfg.stepLoRAScales,
+                       [1: [0.0], 2: [0.5, 0.0], 3: [0.5, 0.6, 0.0], 4: [0.5, 0.6, 0.7, 0.0]])
+        // Every row has one strength per step and ends with the LoRA off.
+        for (steps, row) in cfg.stepLoRAScales {
+            XCTAssertEqual(row.count, steps)
+            XCTAssertEqual(row.last, 0.0)
+        }
+        let off = ZImageConfiguration.nitroFusion2(dedistillLoRA: false)
+        XCTAssertNil(off.stepLoRAFile)
+        XCTAssertTrue(off.stepLoRAScales.isEmpty)
+        XCTAssertNil(off.resolvedStepLoRAFile(storeRoot: nil))
+        XCTAssertNil(ZImageConfiguration.turbo().stepLoRAFile)
+    }
+
     func testCodableRoundTripKeepsTheTier() throws {
         let decoded = try JSONDecoder().decode(
             ZImageConfiguration.self,
@@ -124,6 +153,17 @@ final class NitroFusion2Tests: XCTestCase {
         XCTAssertEqual(decoded.stepShifts, ZImageConfiguration.nitroFusion2StepShifts)
         XCTAssertEqual(decoded.defaultSteps, 1)
         XCTAssertEqual(decoded.quant, .int8)
+        XCTAssertEqual(decoded.stepLoRAFile, ZImageConfiguration.nitroFusion2LoRAFile)
+        XCTAssertEqual(decoded.stepLoRAScales, ZImageConfiguration.nitroFusion2LoRAScales)
+    }
+
+    /// A v0.6.0-stored NitroFusion2 configuration (no LoRA fields) decodes as LoRA-less.
+    func testV060StoredConfigurationDecodesWithoutTheLoRA() throws {
+        let json = #"{"repo":"mlx-community/Z-Image-Turbo","quant":"bf16","defaultSteps":1,"transformerRepo":"ChenDY/NitroFusion2","stepShifts":{"1":3,"2":6,"3":8,"4":9}}"#
+        let decoded = try JSONDecoder().decode(ZImageConfiguration.self, from: Data(json.utf8))
+        XCTAssertEqual(decoded.transformerRepo, "ChenDY/NitroFusion2")
+        XCTAssertNil(decoded.stepLoRAFile)
+        XCTAssertTrue(decoded.stepLoRAScales.isEmpty)
     }
 
     /// A configuration stored before these fields existed still decodes, as a plain tier.

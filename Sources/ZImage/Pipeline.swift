@@ -78,6 +78,8 @@ public enum ZImagePipeline {
         strength: Float = 1.0,
         transformerDtype: DType = .bfloat16,
         decodeImage: Bool = true,
+        // Called before each DiT forward with its 0-based index among the forwards that run.
+        willStep: ((Int) -> Void)? = nil,
         onStep: ((Int, Int) -> Void)? = nil
     ) -> GenerateResult {
         // vae_scale = 2^(len(block_out)-1) * 2 = 16 for flux-dev AE
@@ -144,6 +146,7 @@ public enum ZImagePipeline {
             // skip computation when t == 0 on the last step
             if t == 0 && i == timesteps.count - 1 { continue }
 
+            willStep?(stepsDone)
             let tNorm = (1000.0 - t) / 1000.0  // time reversal
 
             var currentGuidanceScale = guidanceScale

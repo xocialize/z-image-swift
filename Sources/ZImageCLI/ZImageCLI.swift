@@ -66,7 +66,7 @@ struct ZImageCLI {
         // end, proving the engine glue (config resolution, dtype/quant selection, T2IRequest
         // plumbing, PNG encode), not just the raw pipeline. --pkg-e2e [turbo|base|nf2]
         // [--quant 4|8] [--width W [--height H]] (default 1024²) [--steps N] [--seed S]
-        // [--transformer <dir>] (nf2).
+        // [--transformer <dir>] [--no-lora] (nf2).
         if let tier = opt("--pkg-e2e") {
             let snapshot = opt("--snapshot") ?? (tier == "base"
                 ? defaultSnapshot.replacingOccurrences(of: "Z-Image-Turbo", with: "Z-Image")
@@ -83,7 +83,8 @@ struct ZImageCLI {
                 cfg = .base(quant: q, snapshotPath: snapshot)
                 pkg = ZImageT2IPackage(configuration: cfg)
             case "nf2":
-                cfg = .nitroFusion2(quant: q, snapshotPath: snapshot, transformerPath: transformerPath)
+                cfg = .nitroFusion2(quant: q, snapshotPath: snapshot, transformerPath: transformerPath,
+                                    dedistillLoRA: !flag("--no-lora"))
                 pkg = ZImageNitroFusion2T2IPackage(configuration: cfg)
             default:
                 cfg = .turbo(quant: q, snapshotPath: snapshot)

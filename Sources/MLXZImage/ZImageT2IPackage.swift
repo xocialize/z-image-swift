@@ -152,6 +152,16 @@ public final class ZImageT2IPackage: ModelPackage {
         case .int4: ZImageWeights.quantizeDiT(transformer, bits: 4)
         default: break
         }
+        // Per-step LoRA (NitroFusion2's de-distillation LoRA): installed AFTER quantization, as a
+        // bf16 side path over the bf16 or quantized Linears. Strict — a file that does not map
+        // onto the DiT throws.
+        var stepLoRA: ZImageStepLoRAScale? = nil
+        if let file = configuration.resolvedStepLoRAFile(storeRoot: configuration.modelsRootDirectory) {
+            guard fm.fileExists(atPath: file.path) else {
+                throw ZImagePackageError.unreadableSnapshot(file.path)
+            }
+            stepLoRA = try ZImageStepLoRA.install(on: transformer, file: file)
+        }
         // VAE fp32 (force_upcast); encoder bf16 (int4 encoder is a future publish optimization).
         let vae = try ZImageWeights.loadVAE(snapshotPath: snapshot.path, dtype: .float32)
         let encoder = try ZImageWeights.loadTextEncoder(
@@ -166,7 +176,9 @@ public final class ZImageT2IPackage: ModelPackage {
         generator = ZImageGenerator(
             transformer: transformer, vae: vae, textEncoder: textEncoder,
             schedulerShift: shift, schedulerDynamic: dynamic, transformerDtype: .bfloat16,
-            stepShifts: configuration.stepShifts.mapValues { Float($0) })
+            stepShifts: configuration.stepShifts.mapValues { Float($0) },
+            stepLoRA: stepLoRA,
+            stepLoRAScales: configuration.stepLoRAScales.mapValues { $0.map { Float($0) } })
     }
 
     public func unload() async {

@@ -93,7 +93,7 @@ The core stays engine-free: `ZImage` reports into its own `ZImageProgress` task-
 CLI and the parity gates run unchanged. A host binds a sink around `engine.run` (contract 1.51.0)
 or reads `engine.runProgress`.
 
-## NitroFusion2 tier (1–4 steps, v0.6.0)
+## NitroFusion2 tier (1–4 steps, v0.6.0; de-distillation LoRA v0.7.0)
 
 `ZImageNitroFusion2T2IPackage` (surface `z-image-nitrofusion2-t2i`) runs
 [ChenDY/NitroFusion2](https://huggingface.co/ChenDY/NitroFusion2) (Apache-2.0; Chen & Song,
@@ -104,23 +104,31 @@ Its `transformer/config.json` is identical to Turbo's, so only the DiT weights c
 let package = ZImageNitroFusion2T2IPackage(configuration: .nitroFusion2(quant: .int4))
 try await package.load()
 let response = try await package.run(T2IRequest(
-    prompt: "a lighthouse on a stormy coast at dusk", width: 1024, height: 1024,
-    seed: 42)) as! T2IResponse          // one step by default; steps: 1...4
+    prompt: "a cat holding a sign that says hello world", width: 1024, height: 1024,
+    steps: 2, seed: 42)) as! T2IResponse     // steps: 1...4; omitted = 1
 ```
 
-- **Weights:** the transformer is materialized from `ChenDY/NitroFusion2` (`transformer/*`,
-  12.3 GB, already bf16) and the text encoder, VAE, tokenizer and scheduler from
-  `mlx-community/Z-Image-Turbo-bf16`, without Turbo's own transformer. Nothing was republished.
-  `snapshotPath` overrides the Turbo snapshot, `transformerPath` the NitroFusion2 directory.
+- **Which step count:** one step (the default) is the fastest and is fine for scenes and
+  portraits; use two steps when the image contains text. See the measurements below.
+- **Weights:** the transformer (`transformer/*`, 12.3 GB, already bf16) and the LoRA
+  (`nf2-dedistill-lora.safetensors`, 0.38 GB) are materialized from `ChenDY/NitroFusion2`; the
+  text encoder, VAE, tokenizer and scheduler from `mlx-community/Z-Image-Turbo-bf16`, without
+  Turbo's own transformer. Nothing was republished. `snapshotPath` overrides the Turbo
+  snapshot, `transformerPath` the NitroFusion2 directory.
 - **Steps and shift:** only 1, 2, 3 or 4 steps are accepted (`unsupportedSteps` otherwise).
   The static shift follows the step count, as in upstream `inference.py`: 3.0 / 6.0 / 8.0 / 9.0.
+- **De-distillation LoRA (v0.7.0):** runs of 2–4 steps apply upstream's LoRA at its per-step
+  strengths — 2 steps `0.5, 0`; 3 steps `0.5, 0.6, 0`; 4 steps `0.5, 0.6, 0.7, 0` — and one
+  step uses none. It is a bf16 side path on 270 Linears (`ZImageStepLoRA`), so it also runs
+  over the int8/int4 DiT; at strength 0 a layer is exactly its base. Loading is strict: a
+  tensor that does not map onto the DiT throws. `.nitroFusion2(dedistillLoRA: false)` skips
+  the file and the side path (upstream's `--no-dedistill-lora`). A NitroFusion2 directory
+  materialized by v0.6.0 lacks the file and is reported as missing, so the engine fetches it.
 - **Text-to-image only.** The strength-based img2img surface is not offered at these step counts.
-- **Not ported: the de-distillation LoRA.** Upstream recommends `nf2-dedistill-lora.safetensors`
-  for 2+ steps at per-step scales. This package has no LoRA support, so steps 2–4 run as
-  upstream's `--no-dedistill-lora`. One step uses no LoRA upstream either.
 - **No upstream parity run.** The DiT, scheduler and pipeline are the Turbo code that is
-  parity-locked above; the schedule is unit-tested against upstream's sigmas
-  (`StepShiftScheduleTests`). No PyTorch NitroFusion2 golden was generated.
+  parity-locked above; the schedule, the LoRA strengths and the side-path arithmetic are
+  unit-tested (`StepShiftScheduleTests`, `StepLoRATests`, `NitroFusion2Tests`). No PyTorch
+  NitroFusion2 golden was generated.
 
 Measured 2026-11-09 through `zimage-cli --pkg-e2e` (M5 Max 128 GB, Release, 1024², seed 42,
 warm runs, four prompts; AB-T-0469):
@@ -128,14 +136,19 @@ warm runs, four prompts; AB-T-0469):
 | Tier | Steps | Run, bf16 | Run, int4 | Resident bf16 / int4 | MLX peak bf16 / int4 |
 |---|---|---|---|---|---|
 | Turbo | 8 | 11.1–11.3 s | 11.5–11.9 s | 19,539 / 11,295 MiB | 31,304 / 23,060 MiB |
-| NitroFusion2 | 1 | 2.25–2.27 s | 2.31–2.34 s | 19,539 / 11,295 MiB | 31,304 / 23,060 MiB |
-| NitroFusion2 | 2 | 3.50–3.54 s | 3.65–3.66 s | 19,539 / 11,295 MiB | 31,304 / 23,060 MiB |
+| NitroFusion2 | 1 | 2.25–2.27 s | 2.31–2.34 s | 19,902 / 11,658 MiB | 31,668 / 23,424 MiB |
+| NitroFusion2 | 2, LoRA | 3.62–4.19 s | 3.91–4.00 s | 19,902 / 11,658 MiB | 31,668 / 23,424 MiB |
+| NitroFusion2 | 2, no LoRA | 3.50–3.54 s | 3.65–3.66 s | 19,539 / 11,295 MiB | 31,304 / 23,060 MiB |
 
-Resident and peak equal Turbo's, so the tier declares Turbo's footprints. By eye, one-step
-scenes and portraits are coherent and detailed at bf16 and int4. Rendered text is less reliable
-than Turbo's 8-step: "hello world" on a sign came out right on one seed of three at one step
-(misspelled or duplicated on the others, and at two steps on seed 42), and int4 degrades small
-text further. Renders: `mlxengine-image/WIP/nitrofusion2-eval/`.
+Single runs: 3 steps with the LoRA 5.39 s, 4 steps 6.70 s (bf16). The LoRA adds 363 MiB
+resident, which the tier's footprints declare.
+
+By eye (no metric): one-step scenes and portraits are coherent and detailed at bf16 and int4,
+but rendered text is unreliable — "hello world" on a sign was right on one seed of three, and
+two steps without the LoRA did not fix it. Two steps with the LoRA rendered that sign correctly
+on all three seeds, and the storefront's neon sign correctly at int4, at bf16 with a flaw in
+one letter; small chalkboard text is still imperfect, where Turbo's 8-step is clean. Renders:
+`mlxengine-image/WIP/nitrofusion2-eval/`.
 
 ## Weights
 
