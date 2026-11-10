@@ -93,7 +93,7 @@ The core stays engine-free: `ZImage` reports into its own `ZImageProgress` task-
 CLI and the parity gates run unchanged. A host binds a sink around `engine.run` (contract 1.51.0)
 or reads `engine.runProgress`.
 
-## NitroFusion2 tier (1–4 steps, v0.6.0; de-distillation LoRA v0.7.0)
+## NitroFusion2 tier (1–4 steps, v0.6.0; de-distillation LoRA v0.7.0; two-step default v0.7.1)
 
 `ZImageNitroFusion2T2IPackage` (surface `z-image-nitrofusion2-t2i`) runs
 [ChenDY/NitroFusion2](https://huggingface.co/ChenDY/NitroFusion2) (Apache-2.0; Chen & Song,
@@ -105,11 +105,12 @@ let package = ZImageNitroFusion2T2IPackage(configuration: .nitroFusion2(quant: .
 try await package.load()
 let response = try await package.run(T2IRequest(
     prompt: "a cat holding a sign that says hello world", width: 1024, height: 1024,
-    steps: 2, seed: 42)) as! T2IResponse     // steps: 1...4; omitted = 1
+    seed: 42)) as! T2IResponse               // two steps by default; steps: 1...4
 ```
 
-- **Which step count:** one step (the default) is the fastest and is fine for scenes and
-  portraits; use two steps when the image contains text. See the measurements below.
+- **Which step count:** two steps is the default since v0.7.1 (it was one before): with the
+  LoRA it renders text reliably. Pass `steps: 1` for the fastest render, which is fine for
+  scenes and portraits. See the measurements below.
 - **Weights:** the transformer (`transformer/*`, 12.3 GB, already bf16) and the LoRA
   (`nf2-dedistill-lora.safetensors`, 0.38 GB) are materialized from `ChenDY/NitroFusion2`; the
   text encoder, VAE, tokenizer and scheduler from `mlx-community/Z-Image-Turbo-bf16`, without

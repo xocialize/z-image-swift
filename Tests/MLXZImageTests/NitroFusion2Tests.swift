@@ -110,12 +110,12 @@ final class NitroFusion2Tests: XCTestCase {
     func testStepShiftsMatchUpstream() {
         XCTAssertEqual(ZImageConfiguration.nitroFusion2().stepShifts,
                        [1: 3.0, 2: 6.0, 3: 8.0, 4: 9.0])
-        XCTAssertEqual(ZImageConfiguration.nitroFusion2().defaultSteps, 1)
+        XCTAssertEqual(ZImageConfiguration.nitroFusion2().defaultSteps, 2)
     }
 
     func testOnlyDistilledStepCountsAreAccepted() throws {
         let cfg = ZImageConfiguration.nitroFusion2()
-        XCTAssertEqual(try ZImageT2IPackage.checkedSteps(nil, cfg), 1)
+        XCTAssertEqual(try ZImageT2IPackage.checkedSteps(nil, cfg), 2)
         for n in 1...4 { XCTAssertEqual(try ZImageT2IPackage.checkedSteps(n, cfg), n) }
         for n in [0, 5, 8] {
             XCTAssertThrowsError(try ZImageT2IPackage.checkedSteps(n, cfg), "\(n)") { error in
@@ -151,7 +151,7 @@ final class NitroFusion2Tests: XCTestCase {
             from: JSONEncoder().encode(ZImageConfiguration.nitroFusion2(quant: .int8)))
         XCTAssertEqual(decoded.transformerRepo, "ChenDY/NitroFusion2")
         XCTAssertEqual(decoded.stepShifts, ZImageConfiguration.nitroFusion2StepShifts)
-        XCTAssertEqual(decoded.defaultSteps, 1)
+        XCTAssertEqual(decoded.defaultSteps, 2)
         XCTAssertEqual(decoded.quant, .int8)
         XCTAssertEqual(decoded.stepLoRAFile, ZImageConfiguration.nitroFusion2LoRAFile)
         XCTAssertEqual(decoded.stepLoRAScales, ZImageConfiguration.nitroFusion2LoRAScales)

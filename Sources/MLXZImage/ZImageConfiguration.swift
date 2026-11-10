@@ -135,7 +135,9 @@ public struct ZImageConfiguration: PackageConfiguration, ModelStorable, QuantCon
     ) -> ZImageConfiguration {
         ZImageConfiguration(
             repo: repo, quant: quant, snapshotPath: snapshotPath,
-            defaultSteps: 1, defaultGuidanceScale: 0.0,
+            // Two steps, upstream's own default: with the LoRA it renders text reliably, where
+            // one step (the fastest) does not. Was 1 through v0.7.0.
+            defaultSteps: 2, defaultGuidanceScale: 0.0,
             modelsRootDirectory: modelsRootDirectory,
             transformerRepo: transformerRepo, transformerPath: transformerPath,
             stepShifts: nitroFusion2StepShifts,

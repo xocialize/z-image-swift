@@ -53,8 +53,8 @@ public final class ZImageNitroFusion2T2IPackage: ModelPackage {
                 T2IContract.descriptor(
                     name: "z-image-nitrofusion2-t2i",
                     summary: "NitroFusion2 6B text-to-image (Apache-2.0): Z-Image-Turbo distilled "
-                        + "to 1–4 steps at guidance 0 (no CFG); one step by default "
-                        + "(fastest), two steps for reliable rendered text. Text-to-image only.",
+                        + "to 1–4 steps at guidance 0 (no CFG); two steps by default, "
+                        + "one step for the fastest render (text less reliable). Text-to-image only.",
                     modes: []
                 )
             ]
